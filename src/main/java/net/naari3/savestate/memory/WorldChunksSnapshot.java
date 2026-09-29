@@ -3,6 +3,10 @@ package net.naari3.savestate.memory;
 import io.netty.buffer.Unpooled;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.EnumSet;
+import java.util.HashSet;
+import java.util.Optional;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -14,23 +18,35 @@ import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.fluid.Fluid;
+import net.minecraft.SharedConstants;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
 import net.minecraft.network.PacketByteBuf;
 import net.minecraft.server.world.BlockEvent;
 import net.minecraft.server.world.ChunkHolder;
+import net.minecraft.server.world.ChunkTicketType;
 import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerLightingProvider;
 import net.minecraft.server.world.ServerTickScheduler;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.Tickable;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.ChunkSectionPos;
 import net.minecraft.world.Heightmap;
 import net.minecraft.world.ScheduledTick;
+import net.minecraft.world.TickPriority;
+import net.minecraft.util.registry.Registry;
 import net.minecraft.world.chunk.ChunkSection;
 import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.WorldChunk;
+import net.naari3.savestate.SavestateDebug;
+import net.naari3.savestate.SavestateMod;
 import net.naari3.savestate.detcheck.ThreadedAnvilChunkStorageAccess;
+import net.naari3.savestate.mixin.accessor.ChunkTicketManagerInvoker;
+import net.naari3.savestate.mixin.accessor.SerializingRegionBasedStorageAccessor;
+import net.naari3.savestate.mixin.accessor.ServerChunkManagerInvoker;
 import net.naari3.savestate.mixin.accessor.ServerTickSchedulerAccessor;
 import net.naari3.savestate.mixin.accessor.ServerWorldAccessor;
 import net.naari3.savestate.mixin.accessor.WorldChunkAccessor;
@@ -55,6 +71,12 @@ final class WorldChunksSnapshot {
 	private final List<ScheduledTick<Block>> blockTicks;
 	private final List<ScheduledTick<Fluid>> fluidTicks;
 	private final List<BlockEvent> blockEvents;
+	/** 取得時に tick 対象 (ticking) だったチャンク。 */
+	private Set<Long> tickingKeys;
+	/** POI のセクションごとの中身 (複製済み)。 */
+	private Map<Long, Optional<?>> poi;
+	/** 取得後の、読み込み済みチャンク以外への変化の記録。 */
+	private ChunkJournal journal;
 
 	private WorldChunksSnapshot(List<Object[]> chunkData, List<ScheduledTick<Block>> blockTicks, List<ScheduledTick<Fluid>> fluidTicks, List<BlockEvent> blockEvents) {
 		this.chunkData = chunkData;
@@ -67,10 +89,15 @@ final class WorldChunksSnapshot {
 		List<Object[]> roots = new ArrayList<>();
 		List<Long> keys = new ArrayList<>();
 		List<Long> inhabited = new ArrayList<>();
+		Set<Long> ticking = new HashSet<>();
 		for (ChunkHolder holder : ((ThreadedAnvilChunkStorageAccess) world.getChunkManager().threadedAnvilChunkStorage).savestate$chunkHolders()) {
-			WorldChunk chunk = holder.getWorldChunk();
+			// getWorldChunk() は tick 対象 (ticking) のチャンクしか返さない。読み込まれているが tick されない境界のチャンク (レベル 33) も含めて保存する
+			WorldChunk chunk = fullChunk(holder);
 			if (chunk == null) {
 				continue;
+			}
+			if (holder.getWorldChunk() != null) {
+				ticking.add(chunk.getPos().toLong());
 			}
 			WorldChunkAccessor acc = (WorldChunkAccessor) chunk;
 			roots.add(new Object[] { chunk.getSectionArray(), acc.savestate$getHeightmaps(), acc.savestate$getBlockEntities() });
@@ -85,6 +112,11 @@ final class WorldChunksSnapshot {
 			new ArrayList<>(((ServerWorldAccessor) world).savestate$getSyncedBlockEventQueue()));
 		snap.chunkKeys.addAll(keys);
 		snap.inhabitedTimes.addAll(inhabited);
+		snap.tickingKeys = ticking;
+
+		SerializingRegionBasedStorageAccessor poiAcc = poiAccessor(world);
+		snap.poi = new DeepCloner(chunkPolicy).copy(new LinkedHashMap<Long, Optional<?>>(poiAcc.savestate$getLoadedElements()));
+		snap.journal = new ChunkJournal(world, new HashSet<>(keys), poiAcc.savestate$getWorker());
 		for (BlockEntity be : world.blockEntities) {
 			snap.blockEntityOrder.add(be.getPos().toImmutable());
 		}
@@ -96,6 +128,319 @@ final class WorldChunksSnapshot {
 
 	int chunkCount() {
 		return this.chunkKeys.size();
+	}
+
+	ChunkJournal journal() {
+		return this.journal;
+	}
+
+	/**
+	 * 読み込み済みのチャンクの集合を、取得時と同じにそろえる (ワールドは進めない)。
+	 * チケットの期限切れの処理、チケットの反映、読み込みを外す処理、保留中のタスクの実行を、
+	 * 集合が取得時と同じになるか、変化しなくなるまで繰り返す。
+	 * 取得後に読み込まれたチャンクは、中身を取得時点相当に戻してあるので、外すときにその内容でディスクに保存される。
+	 * 戻り値は {繰り返した回数, そろえた後の読み込み済みチャンク数, 取得時にあって今ないチャンク数, 取得時になくて今あるチャンク数}。
+	 */
+	/** 復元中だけ取得時のチャンクを保持するチケット (期限なし)。 */
+	private static final ChunkTicketType<ChunkPos> RESTORE_TICKET = ChunkTicketType.create("mcsr_savestate_restore", Comparator.comparingLong(ChunkPos::toLong));
+	private static final int WAIT_STEP_MS = 10;
+	private static final int MAX_WAIT_MS = 10000;
+	/** 変化がないまま、この回数繰り返したらあきらめる (プレイヤーのチケットやチャンクの読み込みは非同期に進むので長めにとる)。 */
+	private static final int STABLE_ITERATIONS = 300;
+
+	int[] convergeLoadedSet(ServerWorld world) {
+		ServerChunkManager chunkManager = world.getChunkManager();
+		ThreadedAnvilChunkStorageAccess tacs = (ThreadedAnvilChunkStorageAccess) chunkManager.threadedAnvilChunkStorage;
+		Set<Long> wanted = this.journal.snapshotLoaded;
+		int iterations = 0;
+		int stable = 0;
+		int lastCount = -1;
+		int[] diff = new int[3];
+		// そろえる間は、取得時のチャンクに期限なしのチケット (FULL レベル) を付けて、読み込みが外れないようにする。
+		// プレイヤーのチケットが非同期に届くまでの間にレベルが下がって外れると、中のエンティティが NBT から作り直され、
+		// 実行時の状態 (AI など) が失われるため
+		for (long k : wanted) {
+			ChunkPos pos = new ChunkPos(k);
+			chunkManager.addTicket(RESTORE_TICKET, pos, 0, pos);
+		}
+		// プレイヤーのチケットの追加・削除は別スレッドのキュー (playerTicketThrottler) を経由して非同期に届き、
+		// チャンクの読み込みもワーカースレッドで進むので、少しずつ待ちながら繰り返す (最大 MAX_WAIT_MS)
+		for (; iterations < MAX_WAIT_MS / WAIT_STEP_MS; iterations++) {
+			// 期限付きのチケット (getChunk で付く unknown など、期限 1 tick) の期限切れを進める。
+			// 取得時のチャンクは上の RESTORE_TICKET で保持しているので、ここで一時チケットが外れても読み込みは外れない
+			((ChunkTicketManagerInvoker) ((ServerChunkManagerInvoker) chunkManager).savestate$getTicketManager()).savestate$purge();
+			((ServerChunkManagerInvoker) chunkManager).savestate$updateTickets();
+			tacs.savestate$unloadTick();
+			// executeQueuedTasks は 1 回で 1 つしか実行しないので、キューが空になるまで回す
+			// (プレイヤーのチケットの付け外しは、1 チャンクごとのタスクとしてここに積まれる)
+			while (chunkManager.executeQueuedTasks()) {
+			}
+			((ServerChunkManagerInvoker) chunkManager).savestate$updateTickets();
+			diff = loadedDiff(tacs, wanted);
+			int[] tickingDiff = tickingDiff(tacs, this.tickingKeys);
+			if (diff[1] == 0 && diff[2] == 0 && tickingDiff[0] == 0 && tickingDiff[1] == 0) {
+				break;
+			}
+			if (diff[0] == lastCount) {
+				if (++stable >= STABLE_ITERATIONS) {
+					break;
+				}
+			} else {
+				stable = 0;
+				lastCount = diff[0];
+			}
+			try {
+				Thread.sleep(WAIT_STEP_MS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				break;
+			}
+		}
+		for (long k : wanted) {
+			ChunkPos pos = new ChunkPos(k);
+			chunkManager.removeTicket(RESTORE_TICKET, pos, 0, pos);
+		}
+		((ServerChunkManagerInvoker) chunkManager).savestate$updateTickets();
+		if (SavestateDebug.ENABLED && (diff[1] != 0 || diff[2] != 0)) {
+			this.logTicketSamples(world, tacs, wanted);
+		}
+		int[] td = tickingDiff(tacs, this.tickingKeys);
+		if (td[0] != 0 || td[1] != 0) {
+			SavestateMod.LOGGER.warn("[memory] {}: ticking chunk set differs from the snapshot ({} missing, {} extra)",
+				world.getRegistryKey().getValue(), td[0], td[1]);
+		}
+		return new int[] { iterations, diff[0], diff[1], diff[2] };
+	}
+
+	/** 調査用: 取得時とそろわなかったチャンクの読み込みレベルとチケットを、いくつか出す。 */
+	private void logTicketSamples(ServerWorld world, ThreadedAnvilChunkStorageAccess tacs, Set<Long> wanted) {
+		ChunkTicketManagerInvoker tickets = (ChunkTicketManagerInvoker) ((ServerChunkManagerInvoker) world.getChunkManager()).savestate$getTicketManager();
+		int extraShown = 0;
+		for (ChunkHolder holder : tacs.savestate$chunkHolders()) {
+			long k = holder.getPos().toLong();
+			if (fullChunk(holder) != null && !wanted.contains(k) && extraShown++ < 3) {
+				SavestateDebug.log("extra chunk {} level={} tickets={}", holder.getPos(), holder.getLevel(), tickets.savestate$getTicket(k));
+			}
+		}
+		int missingShown = 0;
+		for (long k : wanted) {
+			ChunkPos pos = new ChunkPos(k);
+			if (world.getChunk(pos.x, pos.z, ChunkStatus.FULL, false) == null && missingShown++ < 3) {
+				SavestateDebug.log("missing chunk {} tickets={}", pos, tickets.savestate$getTicket(k));
+			}
+		}
+		for (net.minecraft.server.network.ServerPlayerEntity p : world.getPlayers()) {
+			SavestateDebug.log("player {} at {} camera={}", p.getEntityName(), p.getBlockPos(), p.getCameraPosition());
+		}
+	}
+
+	/** 読み込み済み (FULL。tick されない境界のチャンクも含む) の WorldChunk。 */
+	static WorldChunk fullChunk(ChunkHolder holder) {
+		com.mojang.datafixers.util.Either<WorldChunk, ChunkHolder.Unloaded> e = holder.getBorderFuture().getNow(null);
+		return e == null ? null : e.left().orElse(null);
+	}
+
+	/** {wanted にあって tick 対象でない数, wanted になくて tick 対象の数}。 */
+	private static int[] tickingDiff(ThreadedAnvilChunkStorageAccess tacs, Set<Long> wanted) {
+		Set<Long> ticking = new HashSet<>();
+		for (ChunkHolder holder : tacs.savestate$chunkHolders()) {
+			if (holder.getWorldChunk() != null) {
+				ticking.add(holder.getPos().toLong());
+			}
+		}
+		int missing = 0;
+		for (long k : wanted) {
+			if (!ticking.contains(k)) {
+				missing++;
+			}
+		}
+		int extra = 0;
+		for (long k : ticking) {
+			if (!wanted.contains(k)) {
+				extra++;
+			}
+		}
+		return new int[] { missing, extra };
+	}
+
+	/** {読み込み済みチャンク数, wanted にあって読み込まれていない数, wanted になくて読み込まれている数}。読み込み済み = FULL (境界を含む)。 */
+	private static int[] loadedDiff(ThreadedAnvilChunkStorageAccess tacs, Set<Long> wanted) {
+		Set<Long> loaded = new HashSet<>();
+		for (ChunkHolder holder : tacs.savestate$chunkHolders()) {
+			if (fullChunk(holder) != null) {
+				loaded.add(holder.getPos().toLong());
+			}
+		}
+		int missing = 0;
+		for (long k : wanted) {
+			if (!loaded.contains(k)) {
+				missing++;
+			}
+		}
+		int extra = 0;
+		for (long k : loaded) {
+			if (!wanted.contains(k)) {
+				extra++;
+			}
+		}
+		return new int[] { loaded.size(), missing, extra };
+	}
+
+	void activateJournal() {
+		this.journal.activate();
+	}
+
+	void dispose() {
+		this.journal.deactivate();
+	}
+
+	/**
+	 * 読み込み済みチャンク以外の復元 ({@link #restore} の前に呼ぶ)。
+	 * - 取得時に読み込まれていて今は読み込まれていないチャンクを、同期で読み込む ({@link #restore} で戻せるように)
+	 * - 取得後に読み込まれたチャンク: 今も読み込まれていれば記録した NBT をその場で当て、読み込まれていなければ (保存されていれば) ディスクに書き戻す
+	 * - POI をメモリとディスクの両方で戻す
+	 * 記録した NBT から作るエンティティの NBT を entityTags に足す (エンティティの入れ替えの後で作る)。
+	 * 戻り値は {同期で読み込んだチャンク数, その場で当てたチャンク数, ディスクに書き戻したチャンク数}。
+	 */
+	int[] restoreOutside(ServerWorld world, SharePolicy chunkPolicy, List<CompoundTag> entityTags) {
+		ServerChunkManager chunkManager = world.getChunkManager();
+		int syncLoaded = 0;
+		for (long key : this.chunkKeys) {
+			ChunkPos pos = new ChunkPos(key);
+			if (world.getChunk(pos.x, pos.z, ChunkStatus.FULL, false) == null) {
+				chunkManager.getChunk(pos.x, pos.z, ChunkStatus.FULL, true);
+				syncLoaded++;
+			}
+		}
+
+		int applied = 0;
+		int rewritten = 0;
+		for (Map.Entry<Long, CompoundTag> e : this.journal.loadedAfter.entrySet()) {
+			ChunkPos pos = new ChunkPos(e.getKey());
+			WorldChunk chunk = (WorldChunk) world.getChunk(pos.x, pos.z, ChunkStatus.FULL, false);
+			if (chunk != null) {
+				entityTags.addAll(applyChunkNbt(world, chunk, e.getValue()));
+				applied++;
+			} else if (this.journal.written.contains(e.getKey())) {
+				chunkManager.threadedAnvilChunkStorage.setTagAt(pos, e.getValue());
+				rewritten++;
+			}
+		}
+
+		this.restorePoi(world, chunkPolicy);
+		return new int[] { syncLoaded, applied, rewritten };
+	}
+
+	private void restorePoi(ServerWorld world, SharePolicy chunkPolicy) {
+		SerializingRegionBasedStorageAccessor acc = poiAccessor(world);
+		Map<Long, Optional<?>> fresh = new DeepCloner(chunkPolicy).copy(this.poi);
+		// 取得後に読み込まれたセクション (取得時になかったもの) はメモリから外す。次に使われるときにディスクから読み直される
+		acc.savestate$getLoadedElements().clear();
+		acc.savestate$getUnsavedElements().clear();
+		for (Map.Entry<Long, Optional<?>> e : fresh.entrySet()) {
+			long key = e.getKey();
+			acc.savestate$getLoadedElements().put(key, e.getValue());
+			// ディスクの内容が取得後に変わっているかもしれないので、戻した内容で書き直させる
+			acc.savestate$getUnsavedElements().add(key);
+		}
+		// 取得後に書き換えられたディスク上の POI を、書き換える前の内容に戻す
+		for (Map.Entry<Long, CompoundTag> e : this.journal.poiBefore.entrySet()) {
+			CompoundTag tag = e.getValue();
+			if (tag == null) {
+				tag = new CompoundTag();
+				tag.put("Sections", new CompoundTag());
+				tag.putInt("DataVersion", SharedConstants.getGameVersion().getWorldVersion());
+			}
+			acc.savestate$getWorker().setResult(new ChunkPos(e.getKey()), tag);
+		}
+	}
+
+	/** 記録したチャンクの NBT を、読み込まれている WorldChunk にその場で当てる。エンティティの NBT を返す。 */
+	private static List<CompoundTag> applyChunkNbt(ServerWorld world, WorldChunk chunk, CompoundTag root) {
+		CompoundTag level = root.getCompound("Level");
+		ChunkPos pos = chunk.getPos();
+		ServerChunkManager chunkManager = world.getChunkManager();
+		ServerLightingProvider lighting = chunkManager.getLightingProvider();
+
+		// ブロック
+		ChunkSection[] fresh = new ChunkSection[16];
+		ListTag sections = level.getList("Sections", 10);
+		for (int i = 0; i < sections.size(); i++) {
+			CompoundTag st = sections.getCompound(i);
+			int y = st.getByte("Y");
+			if (y < 0 || y >= 16 || !st.contains("Palette", 9) || !st.contains("BlockStates", 12)) {
+				continue;
+			}
+			ChunkSection section = new ChunkSection(y << 4);
+			section.getContainer().read(st.getList("Palette", 10), st.getLongArray("BlockStates"));
+			section.calculateCounts();
+			if (!section.isEmpty()) {
+				fresh[y] = section;
+			}
+		}
+		ChunkSection[] live = chunk.getSectionArray();
+		for (int y = 0; y < 16; y++) {
+			if (sameContent(live[y], fresh[y])) {
+				continue;
+			}
+			ChunkSection before = live[y];
+			live[y] = fresh[y];
+			notifyChanges(chunk, y, before, fresh[y], lighting, chunkManager);
+			if (ChunkSection.isEmpty(before) != ChunkSection.isEmpty(fresh[y])) {
+				lighting.updateSectionStatus(ChunkSectionPos.from(pos, y), ChunkSection.isEmpty(fresh[y]));
+			}
+		}
+		WorldChunkAccessor acc = (WorldChunkAccessor) chunk;
+		Heightmap.populateHeightmaps(chunk, EnumSet.copyOf(acc.savestate$getHeightmaps().keySet()));
+
+		// ブロックエンティティ
+		Map<BlockPos, BlockEntity> beMap = acc.savestate$getBlockEntities();
+		for (BlockEntity be : beMap.values()) {
+			be.markRemoved();
+			world.blockEntities.remove(be);
+			world.tickingBlockEntities.remove(be);
+		}
+		beMap.clear();
+		ListTag bes = level.getList("TileEntities", 10);
+		for (int i = 0; i < bes.size(); i++) {
+			CompoundTag bt = bes.getCompound(i);
+			BlockPos bp = new BlockPos(bt.getInt("x"), bt.getInt("y"), bt.getInt("z"));
+			BlockEntity be = BlockEntity.createFromTag(chunk.getBlockState(bp), bt);
+			if (be != null) {
+				be.setLocation(world, bp);
+				beMap.put(bp, be);
+				world.addBlockEntity(be);
+			}
+		}
+
+		// スケジュール済みの tick: このチャンクの分を外して、記録したものを入れ直す (時刻は記録時からの相対)
+		world.getBlockTickScheduler().getScheduledTicksInChunk(pos, true, false);
+		world.getFluidTickScheduler().getScheduledTicksInChunk(pos, true, false);
+		scheduleFromNbt(level.getList("TileTicks", 10), world.getBlockTickScheduler(), Registry.BLOCK::get);
+		scheduleFromNbt(level.getList("LiquidTicks", 10), world.getFluidTickScheduler(), Registry.FLUID::get);
+
+		chunk.setInhabitedTime(level.getLong("InhabitedTime"));
+		chunk.setShouldSave(true);
+
+		ListTag entities = level.getList("Entities", 10);
+		List<CompoundTag> out = new ArrayList<>(entities.size());
+		for (int i = 0; i < entities.size(); i++) {
+			out.add(entities.getCompound(i));
+		}
+		return out;
+	}
+
+	private static <T> void scheduleFromNbt(ListTag ticks, ServerTickScheduler<T> scheduler, java.util.function.Function<Identifier, T> byId) {
+		for (int i = 0; i < ticks.size(); i++) {
+			CompoundTag t = ticks.getCompound(i);
+			T obj = byId.apply(new Identifier(t.getString("i")));
+			scheduler.schedule(new BlockPos(t.getInt("x"), t.getInt("y"), t.getInt("z")), obj, t.getInt("t"), TickPriority.byIndex(t.getInt("p")));
+		}
+	}
+
+	private static SerializingRegionBasedStorageAccessor poiAccessor(ServerWorld world) {
+		return (SerializingRegionBasedStorageAccessor) ((ThreadedAnvilChunkStorageAccess) world.getChunkManager().threadedAnvilChunkStorage)
+			.savestate$getPointOfInterestStorage();
 	}
 
 	/** 戻したチャンクの数、見つからなかったチャンクの数、変わったブロックの数を返す。 */

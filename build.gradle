@@ -25,6 +25,9 @@ loom {
 			if (project.hasProperty("savestateMode")) {
 				vmArg "-Dmcsr-savestate.mode=${project.property('savestateMode')}"
 			}
+			if (project.hasProperty("detcheckDisturb")) {
+				vmArg "-Dmcsr-savestate.detcheck.disturb=true"
+			}
 			if (project.hasProperty("detcheckDump")) {
 				vmArg "-Dmcsr-savestate.detcheck.dump=${project.property('detcheckDump')}"
 			}

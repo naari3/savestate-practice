@@ -42,9 +42,12 @@ import net.minecraft.util.math.Vec3i;
 import net.minecraft.util.profiler.Profiler;
 import net.minecraft.util.registry.Registry;
 import net.minecraft.util.registry.RegistryKey;
-import net.minecraft.village.raid.Raid;
 import net.minecraft.world.PersistentState;
+import net.minecraft.world.GameRules;
+import net.minecraft.world.SaveProperties;
 import net.minecraft.world.World;
+import net.minecraft.world.WorldProperties;
+import net.minecraft.world.border.WorldBorder;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.ChunkManager;
 import net.minecraft.world.chunk.ChunkSection;
@@ -60,7 +63,7 @@ import net.naari3.savestate.SavestateMod;
  * - レジストリに登録されたもの (Block、Item、EntityType、MemoryModuleType など)。起動後に全レジストリの全要素を集める
  * - 自分のクラス階層の static フィールドに入っている定数 (ItemStack.EMPTY、DamageSource.FALL など。== で比較するコードがある)
  * - インスタンスフィールドを 1 つも持たないもの (状態がないので共有して問題ない。匿名の TrackedDataHandler など)
- * - ワールド側の単一インスタンスや、今の段階では戻さないもの (World、サーバー、チャンク、プレイヤー、ネットワーク、Raid など)
+ * - ワールド側の単一インスタンスや、今の段階では戻さないもの (World、サーバー、チャンク、ネットワーク、ワールドのプロパティ (level.dat)、ゲームルール、ワールドボーダーなど)
  * - タグ (FluidTags.WATER などを、fastutil のマップのキーとして同一性で引く箇所がある)
  */
 public final class SharePolicy {
@@ -110,9 +113,11 @@ public final class SharePolicy {
 		if (o instanceof World || o instanceof MinecraftServer || o instanceof ChunkManager || o instanceof ThreadedAnvilChunkStorage
 			|| o instanceof Chunk || o instanceof PlayerManager || o instanceof ServerPlayNetworkHandler
 			|| o instanceof ClientConnection || o instanceof Scoreboard || o instanceof AbstractTeam || o instanceof BossBar
-			|| o instanceof Raid || o instanceof PersistentState || o instanceof SerializingRegionBasedStorage
+			|| o instanceof PersistentState || o instanceof SerializingRegionBasedStorage
 			|| o instanceof ServerTickScheduler || o instanceof Profiler || o instanceof IdList
-			|| o instanceof PlayerAdvancementTracker || o instanceof Advancement || o instanceof StatHandler || o instanceof RecipeBook) {
+			|| o instanceof PlayerAdvancementTracker || o instanceof Advancement || o instanceof StatHandler || o instanceof RecipeBook
+			|| o instanceof WorldProperties || o instanceof SaveProperties || o instanceof GameRules || o instanceof GameRules.Key
+			|| o instanceof WorldBorder) {
 			return true;
 		}
 		if (this.shareChunkData && (o instanceof ChunkSection || o instanceof BlockEntity)) {

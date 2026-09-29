@@ -106,6 +106,17 @@ public final class SavestateManager {
 				overlayError(client, "Failed to save slot " + slot + " (see log)");
 				return;
 			}
+			if (memorySlotServer != server) {
+				// 別のワールドのスナップショットは使えないので捨てる (記録も止める)
+				for (int i = 0; i < memorySlots.length; i++) {
+					if (memorySlots[i] != null) {
+						memorySlots[i].dispose();
+						memorySlots[i] = null;
+					}
+				}
+			} else if (memorySlots[slot] != null) {
+				memorySlots[slot].dispose();
+			}
 			memorySlots[slot] = snap;
 			memorySlotServer = server;
 			long ms = (System.nanoTime() - start) / 1_000_000L;

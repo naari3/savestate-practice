@@ -9,16 +9,20 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityType;
 import net.minecraft.entity.boss.dragon.EnderDragonEntity;
 import net.minecraft.entity.boss.dragon.EnderDragonPart;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.scoreboard.ScoreboardState;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.PlayerManager;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.registry.RegistryKey;
+import net.minecraft.world.PersistentState;
 import net.minecraft.world.World;
+import net.minecraft.world.gen.Spawner;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.WorldChunk;
@@ -26,6 +30,7 @@ import net.minecraft.world.level.ServerWorldProperties;
 import net.naari3.savestate.SavestateDebug;
 import net.naari3.savestate.SavestateMod;
 import net.naari3.savestate.mixin.accessor.EntityAccessor;
+import net.naari3.savestate.mixin.accessor.PersistentStateManagerAccessor;
 import net.naari3.savestate.mixin.accessor.ScheduledTickAccessor;
 import net.naari3.savestate.mixin.accessor.ServerWorldAccessor;
 import net.naari3.savestate.mixin.accessor.WorldAccessor;
@@ -57,6 +62,14 @@ public final class MemorySnapshot {
 		/** entitiesById の並び (複製したエンティティとプレイヤー)。 */
 		final List<Object> order = new ArrayList<>();
 		WorldChunksSnapshot chunks;
+		/** ServerWorld のスポーンの管理 (ファントム、行商人など) の複製。今のリストと同じ並び。 */
+		final List<Object> spawners = new ArrayList<>();
+		/** PersistentState (raids、map_N、idcounts など。スコアボードは除く) の複製。 */
+		final Map<String, PersistentState> states = new LinkedHashMap<>();
+		/** ドラゴン戦 (ジ・エンドのみ) の複製。 */
+		Object dragonFight;
+		int traderSpawnDelay;
+		int traderSpawnChance;
 		long time;
 		long timeOfDay;
 		int rainTime;
@@ -108,8 +121,28 @@ public final class MemorySnapshot {
 			snap.worlds.put(world.getRegistryKey(), ws);
 		}
 
-		// 全ワールドのエンティティとプレイヤーを 1 つの対応表で複製する (乗り物、ターゲット、釣り針など、互いの参照をそろえるため)
+		// 全ワールドのエンティティ、プレイヤー、ワールド全体の状態を 1 つの対応表で複製する。
+		// 乗り物、ターゲット、釣り針、レイドの参加者、ドラゴン戦など、互いの参照をそろえるため
 		DeepCloner cloner = new DeepCloner(policy());
+		for (ServerWorld world : server.getWorlds()) {
+			WorldSnap ws = snap.worlds.get(world.getRegistryKey());
+			for (Spawner spawner : ((ServerWorldAccessor) world).savestate$getSpawners()) {
+				cloner.forceClone(spawner);
+				ws.spawners.add(cloner.mapRoot(spawner));
+			}
+			for (Map.Entry<String, PersistentState> e : persistentStates(world).entrySet()) {
+				// 値が null のもの (バニラが「ファイルがなかった」ことを覚えておくために入れている) とスコアボードは扱わない
+				if (e.getValue() == null || e.getValue() instanceof ScoreboardState) {
+					continue;
+				}
+				cloner.forceClone(e.getValue());
+				ws.states.put(e.getKey(), cloner.mapRoot(e.getValue()));
+			}
+			if (world.getEnderDragonFight() != null) {
+				cloner.forceClone(world.getEnderDragonFight());
+				ws.dragonFight = cloner.mapRoot(world.getEnderDragonFight());
+			}
+		}
 		List<Entity> clones = cloner.copyAll(originals);
 		IdentityHashMap<Object, Object> toClone = new IdentityHashMap<>();
 		for (int i = 0; i < originals.size(); i++) {
@@ -122,6 +155,8 @@ public final class MemorySnapshot {
 		}
 		for (WorldSnap ws : snap.worlds.values()) {
 			ws.order.replaceAll(toClone::get);
+			// ここから先の、読み込み済みチャンク以外への変化を記録し始める
+			ws.chunks.activateJournal();
 		}
 
 		long ms = (System.nanoTime() - start) / 1_000_000L;
@@ -137,6 +172,26 @@ public final class MemorySnapshot {
 	}
 
 	public void restore(MinecraftServer server) {
+		List<ChunkJournal> journals = new ArrayList<>();
+		for (WorldSnap ws : this.worlds.values()) {
+			journals.add(ws.chunks.journal());
+		}
+		ChunkJournal.beginRestore(journals);
+		try {
+			this.restoreInner(server);
+		} finally {
+			ChunkJournal.endRestore(journals);
+		}
+	}
+
+	/** このスナップショットを使わなくなったとき (スロットの上書き、別のワールドを開いたとき) に呼ぶ。 */
+	public void dispose() {
+		for (WorldSnap ws : this.worlds.values()) {
+			ws.chunks.dispose();
+		}
+	}
+
+	private void restoreInner(MinecraftServer server) {
 		long start = System.nanoTime();
 		PlayerManager playerManager = server.getPlayerManager();
 
@@ -156,10 +211,20 @@ public final class MemorySnapshot {
 		}
 
 		int[] chunkStats = new int[3];
+		int[] outsideStats = new int[3];
+		Map<ServerWorld, List<CompoundTag>> journalEntities = new IdentityHashMap<>();
 		for (ServerWorld world : server.getWorlds()) {
 			WorldSnap ws = this.worlds.get(world.getRegistryKey());
 			// 1. チャンク (ブロック) を先に戻す。エンティティは戻したチャンクに入れる
 			if (ws != null) {
+				// 1a. 取得時に読み込まれていなかったチャンク、今は読み込まれていないチャンク、POI
+				List<CompoundTag> tags = new ArrayList<>();
+				journalEntities.put(world, tags);
+				int[] o = ws.chunks.restoreOutside(world, chunkPolicy(), tags);
+				for (int k = 0; k < 3; k++) {
+					outsideStats[k] += o[k];
+				}
+				// 1b. 取得時に読み込まれていたチャンク
 				int[] s = ws.chunks.restore(world, chunkPolicy());
 				for (int k = 0; k < 3; k++) {
 					chunkStats[k] += s[k];
@@ -180,11 +245,21 @@ public final class MemorySnapshot {
 		for (ServerPlayerEntity live : before.keySet()) {
 			cloner.copyInto(this.players.get(live.getUuid()), live);
 		}
+		List<PersistentState> touchedStates = new ArrayList<>();
+		for (ServerWorld world : server.getWorlds()) {
+			WorldSnap ws = this.worlds.get(world.getRegistryKey());
+			if (ws != null) {
+				this.bindWorldLevel(world, ws, cloner, touchedStates);
+			}
+		}
 		IdentityHashMap<Object, Entity> toFresh = new IdentityHashMap<>();
 		for (Entity root : this.roots) {
 			toFresh.put(root, cloner.mapRoot(root));
 		}
 		cloner.finish();
+		for (PersistentState state : touchedStates) {
+			state.markDirty();
+		}
 
 		// 4. エンティティを入れ、entitiesById の並び (tick の順序) を保存時と同じにする
 		int restored = 0;
@@ -219,7 +294,20 @@ public final class MemorySnapshot {
 					}
 				}
 			}
-			// スナップショットにないもの (後から入ったプレイヤー) は末尾
+			// 取得後に読み込まれたチャンクにいたエンティティ (記録した NBT から作る)
+			int[] fromJournal = { 0 };
+			for (CompoundTag tag : journalEntities.getOrDefault(world, java.util.Collections.emptyList())) {
+				EntityType.loadEntityWithPassengers(tag, world, ent -> {
+					Chunk c = world.getChunk(MathHelper.floor(ent.getX() / 16.0), MathHelper.floor(ent.getZ() / 16.0), ChunkStatus.FULL, false);
+					if (c instanceof WorldChunk && world.loadEntity(ent)) {
+						c.addEntity(ent);
+						fromJournal[0]++;
+					}
+					return ent;
+				});
+			}
+			restored += fromJournal[0];
+			// スナップショットにないもの (後から入ったプレイヤー、上で作ったエンティティ) は末尾
 			for (Int2ObjectMap.Entry<Entity> en : byId.int2ObjectEntrySet()) {
 				desired.putIfAbsent(en.getIntKey(), en.getValue());
 			}
@@ -235,19 +323,61 @@ public final class MemorySnapshot {
 			en.getValue().afterRestore(en.getKey());
 		}
 
+		// 6. 読み込み済みのチャンクの集合を取得時と同じにそろえる (取得後に読み込まれたチャンクを外す)
+		for (ServerWorld world : server.getWorlds()) {
+			WorldSnap ws = this.worlds.get(world.getRegistryKey());
+			if (ws != null) {
+				int[] c = ws.chunks.convergeLoadedSet(world);
+				SavestateMod.LOGGER.info("[memory] {}: loaded chunk set converged after {} iterations: {} loaded, {} missing, {} extra",
+					world.getRegistryKey().getValue(), c[0], c[1], c[2], c[3]);
+			}
+		}
+
 		RngState.apply(server, this.rng);
 		restoreMaxEntityId(server);
 		ScheduledTickAccessor.savestate$setIdCounter(this.scheduledTickIdCounter);
 
 		long ms = (System.nanoTime() - start) / 1_000_000L;
-		SavestateMod.LOGGER.info("[memory] restored {} entities, {} chunks ({} missing, {} changed blocks) in {} ms",
-			restored, chunkStats[0], chunkStats[1], chunkStats[2], ms);
+		SavestateMod.LOGGER.info("[memory] restored {} entities, {} chunks ({} missing, {} changed blocks), outside: {} sync-loaded, {} re-applied, {} rewritten on disk, in {} ms",
+			restored, chunkStats[0], chunkStats[1], chunkStats[2], outsideStats[0], outsideStats[1], outsideStats[2], ms);
 		if (chunkStats[1] > 0) {
 			SavestateMod.LOGGER.warn("[memory] {} chunks from the snapshot are not loaded now and were not restored", chunkStats[1]);
 		}
 		if (SavestateDebug.ENABLED) {
 			logCounts("restore", cloner.getClonedCounts());
 		}
+	}
+
+	/**
+	 * ワールド全体の状態 (スポーンの管理、PersistentState、ドラゴン戦) を、生きているオブジェクトへの書き戻しとして複製器に登録する。
+	 * エンティティと同じ対応表なので、レイドの参加者やドラゴン戦の水晶などの参照は、戻したエンティティを指す。
+	 */
+	private void bindWorldLevel(ServerWorld world, WorldSnap ws, DeepCloner cloner, List<PersistentState> touchedStates) {
+		List<Spawner> liveSpawners = ((ServerWorldAccessor) world).savestate$getSpawners();
+		for (int i = 0; i < Math.min(liveSpawners.size(), ws.spawners.size()); i++) {
+			if (liveSpawners.get(i).getClass() == ws.spawners.get(i).getClass()) {
+				cloner.copyInto(ws.spawners.get(i), liveSpawners.get(i));
+			}
+		}
+		Map<String, PersistentState> liveStates = persistentStates(world);
+		for (Map.Entry<String, PersistentState> e : ws.states.entrySet()) {
+			PersistentState live = liveStates.get(e.getKey());
+			if (live != null && live.getClass() == e.getValue().getClass()) {
+				cloner.copyInto(e.getValue(), live);
+				touchedStates.add(live);
+			} else if (live == null) {
+				PersistentState fresh = cloner.mapRoot(e.getValue());
+				liveStates.put(e.getKey(), fresh);
+				touchedStates.add(fresh);
+			}
+		}
+		if (ws.dragonFight != null && world.getEnderDragonFight() != null) {
+			cloner.copyInto(ws.dragonFight, world.getEnderDragonFight());
+		}
+	}
+
+	private static Map<String, PersistentState> persistentStates(ServerWorld world) {
+		return ((PersistentStateManagerAccessor) world.getPersistentStateManager()).savestate$getLoadedStates();
 	}
 
 	private void restoreMaxEntityId(MinecraftServer server) {
@@ -271,6 +401,8 @@ public final class MemorySnapshot {
 	private static void captureWorldState(ServerWorld world, WorldSnap ws) {
 		ServerWorldProperties p = ((ServerWorldAccessor) world).savestate$getWorldProperties();
 		WorldAccessor wa = (WorldAccessor) world;
+		ws.traderSpawnDelay = p.getWanderingTraderSpawnDelay();
+		ws.traderSpawnChance = p.getWanderingTraderSpawnChance();
 		ws.time = p.getTime();
 		ws.timeOfDay = p.getTimeOfDay();
 		ws.rainTime = p.getRainTime();
@@ -287,6 +419,8 @@ public final class MemorySnapshot {
 	private static void restoreWorldState(ServerWorld world, WorldSnap ws) {
 		ServerWorldProperties p = ((ServerWorldAccessor) world).savestate$getWorldProperties();
 		WorldAccessor wa = (WorldAccessor) world;
+		p.setWanderingTraderSpawnDelay(ws.traderSpawnDelay);
+		p.setWanderingTraderSpawnChance(ws.traderSpawnChance);
 		p.setTime(ws.time);
 		p.setTimeOfDay(ws.timeOfDay);
 		p.setRainTime(ws.rainTime);

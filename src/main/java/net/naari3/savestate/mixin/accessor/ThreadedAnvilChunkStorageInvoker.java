@@ -1,5 +1,6 @@
 package net.naari3.savestate.mixin.accessor;
 
+import java.util.function.BooleanSupplier;
 import net.minecraft.server.world.ChunkHolder;
 import net.minecraft.server.world.ThreadedAnvilChunkStorage;
 import net.minecraft.world.poi.PointOfInterestStorage;
@@ -15,6 +16,9 @@ public abstract class ThreadedAnvilChunkStorageInvoker implements ThreadedAnvilC
 	@Shadow
 	protected abstract Iterable<ChunkHolder> entryIterator();
 
+	@Shadow
+	protected abstract void tick(BooleanSupplier shouldKeepTicking);
+
 	@Override
 	public PointOfInterestStorage savestate$getPointOfInterestStorage() {
 		return this.getPointOfInterestStorage();
@@ -23,5 +27,10 @@ public abstract class ThreadedAnvilChunkStorageInvoker implements ThreadedAnvilC
 	@Override
 	public Iterable<ChunkHolder> savestate$chunkHolders() {
 		return this.entryIterator();
+	}
+
+	@Override
+	public void savestate$unloadTick() {
+		this.tick(() -> true);
 	}
 }

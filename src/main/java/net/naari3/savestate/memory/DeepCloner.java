@@ -76,9 +76,18 @@ public final class DeepCloner {
 	/** 第 2 段階 (ハッシュ・ソート系の投入)。内側のコレクションを先に埋めるため、登録と逆順に実行する。 */
 	private final List<Runnable> deferred = new ArrayList<>();
 	private final Map<Class<?>, Integer> clonedCounts = new HashMap<>();
+	private final Set<Object> forced = Collections.newSetFromMap(new IdentityHashMap<>());
 
 	public DeepCloner(SharePolicy policy) {
 		this.policy = policy;
+	}
+
+	/**
+	 * 共有判定 ({@link SharePolicy}) にかかわらず、このオブジェクトは複製する。
+	 * 普段は共有するもの (PersistentState など) を、スナップショットのルートとして複製したいときに使う。
+	 */
+	public void forceClone(Object o) {
+		this.forced.add(o);
 	}
 
 	/** from を複製せず、to に対応させる (例: スナップショット内のプレイヤー → 今のプレイヤー)。 */
@@ -153,6 +162,9 @@ public final class DeepCloner {
 		}
 		boolean jdk = ClassInfo.isJdk(c);
 		ClassInfo info = jdk ? null : ClassInfo.of(c);
+		if (!jdk && this.forced.contains(o)) {
+			return this.mapReflective(o, c, info);
+		}
 		if (this.policy.isShared(o, c, info)) {
 			this.map.put(o, o);
 			return o;

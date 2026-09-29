@@ -9,7 +9,11 @@ import java.util.List;
 import java.util.Map;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.block.Blocks;
 import net.minecraft.client.gui.screen.TitleScreen;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.Heightmap;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.LiteralText;
 import net.naari3.savestate.detcheck.DetCheck;
@@ -31,12 +35,16 @@ public final class DetCheckDriver {
 	private static final boolean EXIT = Boolean.getBoolean("mcsr-savestate.detcheck.exit");
 	private static final int AUTO_SLOT = SavestateManager.SLOT_COUNT;
 	private static final int SETTLE_TICKS = 40;
+	private static final boolean DISTURB = Boolean.getBoolean("mcsr-savestate.detcheck.disturb");
+	/** 飛ばしてから元のチャンクの読み込みが外れて保存されるまで待つ tick 数。 */
+	private static final int DISTURB_FAR_TICKS = 400;
+	private static int disturbTicks;
 	private static final int STABLE_TICKS = 100;
 	private static int lastChunkCount = -1;
 	private static int stableTicks;
 
 	private enum State {
-		IDLE, SETTLE, SAVING, RUNNING
+		IDLE, SETTLE, SAVING, RUNNING, DISTURBING
 	}
 
 	private static State state = State.IDLE;
@@ -99,16 +107,67 @@ public final class DetCheckDriver {
 				if (run != null) {
 					results.add(run);
 					SavestateMod.LOGGER.info("[DetCheck] run {}/{} recorded ({} ticks)", results.size(), RUNS, run.size());
-					if (results.size() < RUNS) {
+					if (results.size() < RUNS && DISTURB) {
+						startDisturbance(client);
+					} else if (results.size() < RUNS) {
 						startNextRun(client);
 					} else {
 						finish(client);
 					}
 				}
 				break;
+			case DISTURBING:
+				disturbTicks++;
+				if (disturbTicks == DISTURB_FAR_TICKS) {
+					client.getServer().execute(DetCheckDriver::disturbFar);
+				}
+				if (disturbTicks >= DISTURB_FAR_TICKS + 40) {
+					state = State.RUNNING;
+					startNextRun(client);
+				}
+				break;
 			default:
 				break;
 		}
+	}
+
+	/**
+	 * かき乱し (-Dmcsr-savestate.detcheck.disturb=true): 2 回目以降の復元の前に、取得時に読み込まれていたチャンクを変更し、
+	 * プレイヤーを遠くへ飛ばして元のチャンクの読み込みを外させ (ディスクに書かせ)、飛んだ先の新しいチャンクも変更する。
+	 * 読み込み済みチャンク以外の復元 (ChunkJournal) が正しければ、それでも復元後の記録は 1 回目と一致するはず。
+	 */
+	private static void startDisturbance(MinecraftClient client) {
+		state = State.DISTURBING;
+		disturbTicks = 0;
+		client.getServer().execute(() -> {
+			ServerPlayerEntity player = client.getServer().getPlayerManager().getPlayerList().get(0);
+			ServerWorld world = player.getServerWorld();
+			BlockPos base = player.getBlockPos().up(3);
+			for (int dx = -3; dx <= 3; dx++) {
+				for (int dz = -3; dz <= 3; dz++) {
+					world.setBlockState(base.add(dx, 0, dz), Blocks.GLASS.getDefaultState());
+				}
+			}
+			// 落下で死なないように飛行状態にする (能力は復元で戻る)
+			player.abilities.allowFlying = true;
+			player.abilities.flying = true;
+			player.sendAbilitiesUpdate();
+			player.teleport(world, player.getX() + 800, 200, player.getZ(), player.yaw, player.pitch);
+			SavestateMod.LOGGER.info("[DetCheck] disturbance: placed glass near {} and teleported player away", base);
+		});
+	}
+
+	private static void disturbFar() {
+		MinecraftClient client = MinecraftClient.getInstance();
+		ServerPlayerEntity player = client.getServer().getPlayerManager().getPlayerList().get(0);
+		ServerWorld world = player.getServerWorld();
+		BlockPos top = world.getTopPosition(Heightmap.Type.MOTION_BLOCKING, player.getBlockPos());
+		for (int dx = -2; dx <= 2; dx++) {
+			for (int dz = -2; dz <= 2; dz++) {
+				world.setBlockState(top.add(dx, 0, dz), Blocks.GOLD_BLOCK.getDefaultState());
+			}
+		}
+		SavestateMod.LOGGER.info("[DetCheck] disturbance: placed gold near {} (new chunks)", top);
 	}
 
 	private static void startRuns(MinecraftClient client) {

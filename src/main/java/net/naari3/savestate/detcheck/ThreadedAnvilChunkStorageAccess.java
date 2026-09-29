@@ -9,4 +9,7 @@ public interface ThreadedAnvilChunkStorageAccess {
 	Iterable<ChunkHolder> savestate$chunkHolders();
 
 	PointOfInterestStorage savestate$getPointOfInterestStorage();
+
+	/** 読み込みを外す対象になったチャンクを外して保存する (ThreadedAnvilChunkStorage.tick)。 */
+	void savestate$unloadTick();
 }

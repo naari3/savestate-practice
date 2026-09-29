@@ -142,13 +142,18 @@ public final class DetCheck {
 	 */
 	private static void snapshotChunks(ServerWorld world, String w, Map<String, String> m) {
 		int loaded = 0;
+		int ticking = 0;
 		long all = 17;
 		for (net.minecraft.server.world.ChunkHolder holder : ((ThreadedAnvilChunkStorageAccess) world.getChunkManager().threadedAnvilChunkStorage).savestate$chunkHolders()) {
-			net.minecraft.world.chunk.WorldChunk chunk = holder.getWorldChunk();
+			com.mojang.datafixers.util.Either<net.minecraft.world.chunk.WorldChunk, net.minecraft.server.world.ChunkHolder.Unloaded> full = holder.getBorderFuture().getNow(null);
+			net.minecraft.world.chunk.WorldChunk chunk = full == null ? null : full.left().orElse(null);
 			if (chunk == null) {
 				continue;
 			}
 			loaded++;
+			if (holder.getWorldChunk() != null) {
+				ticking++;
+			}
 			long h = 1;
 			for (net.minecraft.world.chunk.ChunkSection section : chunk.getSectionArray()) {
 				if (section == null || section.isEmpty()) {
@@ -173,6 +178,7 @@ public final class DetCheck {
 			all = all * 31 + h;
 		}
 		m.put("world " + w + " loadedChunks", Integer.toString(loaded));
+		m.put("world " + w + " tickingChunks", Integer.toString(ticking));
 		m.put("world " + w + " scheduledBlockTicks", Integer.toString(world.getBlockTickScheduler().getTicks()));
 		m.put("world " + w + " scheduledFluidTicks", Integer.toString(world.getFluidTickScheduler().getTicks()));
 	}

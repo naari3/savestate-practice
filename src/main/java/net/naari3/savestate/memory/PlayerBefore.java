@@ -11,6 +11,7 @@ import net.minecraft.network.packet.s2c.play.HeldItemChangeS2CPacket;
 import net.minecraft.network.packet.s2c.play.RemoveEntityStatusEffectS2CPacket;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.math.ChunkSectionPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.ChunkStatus;
@@ -30,6 +31,8 @@ final class PlayerBefore {
 	private final int chunkZ;
 	private final int openScreenSyncId;
 	private final List<StatusEffectInstance> effects;
+	/** チケットの管理側に登録されている、プレイヤーがチャンクを読み込ませている位置。 */
+	private final ChunkSectionPos cameraPosition;
 
 	PlayerBefore(ServerPlayerEntity player) {
 		this.inChunk = player.updateNeeded;
@@ -38,6 +41,7 @@ final class PlayerBefore {
 		this.chunkZ = player.chunkZ;
 		this.openScreenSyncId = player.currentScreenHandler.syncId;
 		this.effects = new ArrayList<>(player.getStatusEffects());
+		this.cameraPosition = player.getCameraPosition();
 	}
 
 	void afterRestore(ServerPlayerEntity player) {
@@ -54,6 +58,11 @@ final class PlayerBefore {
 		if (now instanceof WorldChunk) {
 			now.addEntity(player);
 		}
+
+		// 書き戻しで cameraPosition もスナップショットの値になっているが、チケットの管理側の登録は復元前の位置のまま。
+		// 復元前の値に戻してから、今の位置へ移し直す (食い違うと、次に移動したときに登録のない位置から外そうとして落ちる)
+		player.setCameraPosition(this.cameraPosition);
+		world.getChunkManager().updateCameraPosition(player);
 
 		// 保存時にクライアントへ送る予定だったエンティティ削除は、今のクライアントには関係ない
 		((ServerPlayerEntityAccessor) player).savestate$getRemovedEntities().clear();
