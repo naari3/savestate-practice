@@ -1,0 +1,45 @@
+{
+	"required": true,
+	"minVersion": "0.8",
+	"package": "net.naari3.savestate.mixin",
+	"compatibilityLevel": "JAVA_8",
+	"mixins": [
+		"accessor.MinecraftServerAccessor",
+		"accessor.SerializingRegionBasedStorageAccessor",
+		"accessor.ServerWorldAccessor",
+		"accessor.ThreadedAnvilChunkStorageInvoker",
+		"accessor.WanderingTraderManagerAccessor",
+		"accessor.WorldAccessor",
+		"debug.FindWalkTargetTaskDebugMixin",
+		"debug.VillagerDebugMixin",
+		"rng.AbstractFurnaceBlockEntityRngMixin",
+		"rng.DispenserBlockEntityRngMixin",
+		"rng.EnchantingTableBlockEntityRngMixin",
+		"rng.EnchantmentScreenHandlerRngMixin",
+		"rng.EntityRngMixin",
+		"rng.ExplosionRngMixin",
+		"rng.FishingBobberEntityRngMixin",
+		"rng.ItemRngMixin",
+		"rng.ItemScattererRngMixin",
+		"rng.LivingEntityRngMixin",
+		"rng.LootContextBuilderRngMixin",
+		"rng.MathHelperRngMixin",
+		"rng.MinecraftServerRngMixin",
+		"rng.PlayerManagerRngMixin",
+		"rng.RaidRngMixin",
+		"rng.SensorRngMixin",
+		"rng.ServerChunkManagerRngMixin",
+		"rng.ServerPlayerEntityRngMixin",
+		"rng.WanderingTraderManagerRngMixin",
+		"rng.WeightedListRngMixin",
+		"rng.WorldRngMixin"
+	],
+	"client": [
+		"GameOptionsMixin",
+		"MinecraftClientMixin",
+		"accessor.KeyBindingAccessor"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

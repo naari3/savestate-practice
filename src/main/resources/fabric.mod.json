@@ -1,0 +1,24 @@
+{
+	"schemaVersion": 1,
+	"id": "mcsr-savestate",
+	"version": "${version}",
+	"name": "MCSR Savestate",
+	"description": "Savestate / loadstate for Minecraft 1.16.1 speedrun practice. No Fabric API.",
+	"authors": [
+		"naari3"
+	],
+	"license": "MIT",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"net.naari3.savestate.SavestateMod"
+		]
+	},
+	"mixins": [
+		"mcsr-savestate.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.16.0",
+		"minecraft": "1.16.1"
+	}
+}
