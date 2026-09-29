@@ -257,6 +257,17 @@ final class WorldChunksSnapshot {
 		}
 	}
 
+	/** 読み込み済み (FULL) のチャンクの位置。 */
+	static Set<Long> fullChunkKeys(ServerWorld world) {
+		Set<Long> keys = new HashSet<>();
+		for (ChunkHolder holder : ((ThreadedAnvilChunkStorageAccess) world.getChunkManager().threadedAnvilChunkStorage).savestate$chunkHolders()) {
+			if (fullChunk(holder) != null) {
+				keys.add(holder.getPos().toLong());
+			}
+		}
+		return keys;
+	}
+
 	/** 読み込み済み (FULL。tick されない境界のチャンクも含む) の WorldChunk。 */
 	static WorldChunk fullChunk(ChunkHolder holder) {
 		com.mojang.datafixers.util.Either<WorldChunk, ChunkHolder.Unloaded> e = holder.getBorderFuture().getNow(null);

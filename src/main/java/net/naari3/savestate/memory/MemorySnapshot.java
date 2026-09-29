@@ -2,10 +2,12 @@ package net.naari3.savestate.memory;
 
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.entity.Entity;
@@ -18,6 +20,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.PlayerManager;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.registry.RegistryKey;
 import net.minecraft.world.PersistentState;
@@ -110,13 +113,23 @@ public final class MemorySnapshot {
 		MemorySnapshot snap = new MemorySnapshot(RngState.capture(server), EntityAccessor.savestate$getMaxEntityId().get(),
 			ScheduledTickAccessor.savestate$getIdCounter());
 		List<Entity> originals = new ArrayList<>();
+		int skipped = 0;
 		for (ServerWorld world : server.getWorlds()) {
 			WorldSnap ws = new WorldSnap();
+			// 読み込まれた (FULL の) チャンクにいないエンティティは取り込まない。チャンクの読み込みを外す処理は後からタスクとして走るので、
+			// 外れかけのチャンクにいたエンティティがしばらく entitiesById に残っている。それらはチャンクと一緒にディスクへ保存されるので、
+			// 取り込むと復元時に「チャンクが読み込まれていれば入る、いなければ入らない」と結果が回ごとに変わる
+			Set<Long> full = WorldChunksSnapshot.fullChunkKeys(world);
 			for (Entity e : ((ServerWorldAccessor) world).savestate$getEntitiesById().values()) {
-				if (!(e instanceof EnderDragonPart)) {
-					ws.order.add(e);
-					originals.add(e);
+				if (e instanceof EnderDragonPart) {
+					continue;
 				}
+				if (!(e instanceof ServerPlayerEntity) && !full.contains(ChunkPos.toLong(e.chunkX, e.chunkZ))) {
+					skipped++;
+					continue;
+				}
+				ws.order.add(e);
+				originals.add(e);
 			}
 			captureWorldState(world, ws);
 			ws.chunks = WorldChunksSnapshot.capture(world, chunkPolicy());
@@ -166,7 +179,8 @@ public final class MemorySnapshot {
 		for (WorldSnap ws : snap.worlds.values()) {
 			chunkCount += ws.chunks.chunkCount();
 		}
-		SavestateMod.LOGGER.info("[memory] captured {} entities, {} players, {} chunks in {} ms", snap.roots.size(), snap.players.size(), chunkCount, ms);
+		SavestateMod.LOGGER.info("[memory] captured {} entities, {} players, {} chunks in {} ms ({} entities in chunks being unloaded were skipped)",
+			snap.roots.size(), snap.players.size(), chunkCount, ms, skipped);
 		if (SavestateDebug.ENABLED) {
 			logCounts("capture", cloner.getClonedCounts());
 		}
@@ -397,6 +411,31 @@ public final class MemorySnapshot {
 		RngState.apply(server, this.rng);
 		restoreMaxEntityId(server);
 		ScheduledTickAccessor.savestate$setIdCounter(this.scheduledTickIdCounter);
+
+		if (SavestateDebug.ENABLED) {
+			// 調査用: 復元後のワールドにいる、スナップショットから入れたものでもプレイヤーでもないエンティティ
+			Set<Entity> fresh = Collections.newSetFromMap(new IdentityHashMap<>());
+			fresh.addAll(toFresh.values());
+			for (ServerWorld world : server.getWorlds()) {
+				WorldSnap ws = this.worlds.get(world.getRegistryKey());
+				int strays = 0;
+				for (Entity e : world.iterateEntities()) {
+					if (fresh.contains(e) || e instanceof ServerPlayerEntity || e instanceof EnderDragonPart) {
+						continue;
+					}
+					if (strays++ < 6) {
+						long ck = ChunkPos.toLong(e.chunkX, e.chunkZ);
+						SavestateDebug.log("stray entity after restore: {} {} at {} chunk=({}, {}) loaded={} inSnapshot={} age={}",
+							e.getType(), e.getUuidAsString().substring(0, 8), e.getBlockPos(), e.chunkX, e.chunkZ,
+							world.getChunk(e.chunkX, e.chunkZ, ChunkStatus.FULL, false) != null,
+							ws != null && ws.chunks.journal().snapshotLoaded.contains(ck), e.age);
+					}
+				}
+				if (strays > 0) {
+					SavestateDebug.log("{}: {} stray entities after restore", world.getRegistryKey().getValue(), strays);
+				}
+			}
+		}
 
 		long ms = (System.nanoTime() - start) / 1_000_000L;
 		SavestateMod.LOGGER.info("[memory] restored {} entities, {} chunks ({} missing, {} changed blocks), outside: {} sync-loaded, {} re-applied in place, {} rewritten on disk, in {} ms (apply only)",
