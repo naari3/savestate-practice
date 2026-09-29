@@ -69,6 +69,7 @@ public final class MemorySnapshot {
 		/** ドラゴン戦 (ジ・エンドのみ) の複製。 */
 		Object dragonFight;
 		int traderSpawnDelay;
+		int idleTimeout;
 		int traderSpawnChance;
 		long time;
 		long timeOfDay;
@@ -294,20 +295,7 @@ public final class MemorySnapshot {
 					}
 				}
 			}
-			// 取得後に読み込まれたチャンクにいたエンティティ (記録した NBT から作る)
-			int[] fromJournal = { 0 };
-			for (CompoundTag tag : journalEntities.getOrDefault(world, java.util.Collections.emptyList())) {
-				EntityType.loadEntityWithPassengers(tag, world, ent -> {
-					Chunk c = world.getChunk(MathHelper.floor(ent.getX() / 16.0), MathHelper.floor(ent.getZ() / 16.0), ChunkStatus.FULL, false);
-					if (c instanceof WorldChunk && world.loadEntity(ent)) {
-						c.addEntity(ent);
-						fromJournal[0]++;
-					}
-					return ent;
-				});
-			}
-			restored += fromJournal[0];
-			// スナップショットにないもの (後から入ったプレイヤー、上で作ったエンティティ) は末尾
+			// スナップショットにないもの (後から入ったプレイヤーなど) は末尾
 			for (Int2ObjectMap.Entry<Entity> en : byId.int2ObjectEntrySet()) {
 				desired.putIfAbsent(en.getIntKey(), en.getValue());
 			}
@@ -327,7 +315,32 @@ public final class MemorySnapshot {
 		for (ServerWorld world : server.getWorlds()) {
 			WorldSnap ws = this.worlds.get(world.getRegistryKey());
 			if (ws != null) {
+				if (SavestateDebug.ENABLED) {
+					ws.chunks.logMissingTicks(world, "before convergence");
+				}
 				int[] c = ws.chunks.convergeLoadedSet(world);
+				if (SavestateDebug.ENABLED) {
+					ws.chunks.logMissingTicks(world, "after convergence");
+				}
+				List<CompoundTag> leftover = new ArrayList<>();
+				int[] rw = ws.chunks.rewriteJournalChunks(world, leftover);
+				outsideStats[1] += rw[1];
+				outsideStats[2] += rw[0];
+				spawnFromTags(world, leftover);
+				if (SavestateDebug.ENABLED) {
+					int orphan = 0;
+					for (Entity e : world.iterateEntities()) {
+						if (world.getChunk(e.chunkX, e.chunkZ, ChunkStatus.FULL, false) == null) {
+							if (orphan++ < 5) {
+								SavestateDebug.log("entity without loaded chunk: {} at {} chunk=({}, {}) inSnapshotChunks={} fromSnapshot={}",
+									e.getType(), e.getBlockPos(), e.chunkX, e.chunkZ,
+									ws.chunks.journal().snapshotLoaded.contains(net.minecraft.util.math.ChunkPos.toLong(e.chunkX, e.chunkZ)),
+									toFresh.containsValue(e));
+							}
+						}
+					}
+					SavestateDebug.log("{}: {} entities without a loaded chunk after convergence", world.getRegistryKey().getValue(), orphan);
+				}
 				SavestateMod.LOGGER.info("[memory] {}: loaded chunk set converged after {} iterations: {} loaded, {} missing, {} extra",
 					world.getRegistryKey().getValue(), c[0], c[1], c[2], c[3]);
 			}
@@ -338,7 +351,7 @@ public final class MemorySnapshot {
 		ScheduledTickAccessor.savestate$setIdCounter(this.scheduledTickIdCounter);
 
 		long ms = (System.nanoTime() - start) / 1_000_000L;
-		SavestateMod.LOGGER.info("[memory] restored {} entities, {} chunks ({} missing, {} changed blocks), outside: {} sync-loaded, {} re-applied, {} rewritten on disk, in {} ms",
+		SavestateMod.LOGGER.info("[memory] restored {} entities, {} chunks ({} missing, {} changed blocks), outside: {} sync-loaded, {} re-applied in place, {} rewritten on disk, in {} ms",
 			restored, chunkStats[0], chunkStats[1], chunkStats[2], outsideStats[0], outsideStats[1], outsideStats[2], ms);
 		if (chunkStats[1] > 0) {
 			SavestateMod.LOGGER.warn("[memory] {} chunks from the snapshot are not loaded now and were not restored", chunkStats[1]);
@@ -376,6 +389,19 @@ public final class MemorySnapshot {
 		}
 	}
 
+	/** 記録した NBT からエンティティを作ってワールドに入れる (取得後に読み込まれたチャンクが外れずに残ったときだけ使う)。 */
+	private static void spawnFromTags(ServerWorld world, List<CompoundTag> tags) {
+		for (CompoundTag tag : tags) {
+			EntityType.loadEntityWithPassengers(tag, world, ent -> {
+				Chunk c = world.getChunk(MathHelper.floor(ent.getX() / 16.0), MathHelper.floor(ent.getZ() / 16.0), ChunkStatus.FULL, false);
+				if (c instanceof WorldChunk && world.loadEntity(ent)) {
+					c.addEntity(ent);
+				}
+				return ent;
+			});
+		}
+	}
+
 	private static Map<String, PersistentState> persistentStates(ServerWorld world) {
 		return ((PersistentStateManagerAccessor) world.getPersistentStateManager()).savestate$getLoadedStates();
 	}
@@ -401,6 +427,7 @@ public final class MemorySnapshot {
 	private static void captureWorldState(ServerWorld world, WorldSnap ws) {
 		ServerWorldProperties p = ((ServerWorldAccessor) world).savestate$getWorldProperties();
 		WorldAccessor wa = (WorldAccessor) world;
+		ws.idleTimeout = ((ServerWorldAccessor) world).savestate$getIdleTimeout();
 		ws.traderSpawnDelay = p.getWanderingTraderSpawnDelay();
 		ws.traderSpawnChance = p.getWanderingTraderSpawnChance();
 		ws.time = p.getTime();
@@ -419,6 +446,7 @@ public final class MemorySnapshot {
 	private static void restoreWorldState(ServerWorld world, WorldSnap ws) {
 		ServerWorldProperties p = ((ServerWorldAccessor) world).savestate$getWorldProperties();
 		WorldAccessor wa = (WorldAccessor) world;
+		((ServerWorldAccessor) world).savestate$setIdleTimeout(ws.idleTimeout);
 		p.setWanderingTraderSpawnDelay(ws.traderSpawnDelay);
 		p.setWanderingTraderSpawnChance(ws.traderSpawnChance);
 		p.setTime(ws.time);

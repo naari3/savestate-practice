@@ -12,4 +12,7 @@ public interface ThreadedAnvilChunkStorageAccess {
 
 	/** 読み込みを外す対象になったチャンクを外して保存する (ThreadedAnvilChunkStorage.tick)。 */
 	void savestate$unloadTick();
+
+	/** 読み込みを外す処理が残っているか (外す予定、外している途中、外す処理のタスク)。 */
+	boolean savestate$unloadPending();
 }

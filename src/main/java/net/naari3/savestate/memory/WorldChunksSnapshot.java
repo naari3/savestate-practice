@@ -178,7 +178,8 @@ final class WorldChunksSnapshot {
 			((ServerChunkManagerInvoker) chunkManager).savestate$updateTickets();
 			diff = loadedDiff(tacs, wanted);
 			int[] tickingDiff = tickingDiff(tacs, this.tickingKeys);
-			if (diff[1] == 0 && diff[2] == 0 && tickingDiff[0] == 0 && tickingDiff[1] == 0) {
+			// 集合がそろっても、読み込みを外す処理 (エンティティの取り外しと保存) はタスクとして後から走るので、それも終わるまで待つ
+			if (diff[1] == 0 && diff[2] == 0 && tickingDiff[0] == 0 && tickingDiff[1] == 0 && !tacs.savestate$unloadPending()) {
 				break;
 			}
 			if (diff[0] == lastCount) {
@@ -234,6 +235,28 @@ final class WorldChunksSnapshot {
 		}
 	}
 
+	/** チケットの変化を反映し、読み込みを外す処理が残らなくなるまで回す (最大 MAX_WAIT_MS)。 */
+	static void flushUnloads(ServerWorld world) {
+		ServerChunkManager chunkManager = world.getChunkManager();
+		ThreadedAnvilChunkStorageAccess tacs = (ThreadedAnvilChunkStorageAccess) chunkManager.threadedAnvilChunkStorage;
+		for (int i = 0; i < MAX_WAIT_MS / WAIT_STEP_MS; i++) {
+			((ServerChunkManagerInvoker) chunkManager).savestate$updateTickets();
+			tacs.savestate$unloadTick();
+			while (chunkManager.executeQueuedTasks()) {
+			}
+			((ServerChunkManagerInvoker) chunkManager).savestate$updateTickets();
+			if (!tacs.savestate$unloadPending()) {
+				return;
+			}
+			try {
+				Thread.sleep(WAIT_STEP_MS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				return;
+			}
+		}
+	}
+
 	/** 読み込み済み (FULL。tick されない境界のチャンクも含む) の WorldChunk。 */
 	static WorldChunk fullChunk(ChunkHolder holder) {
 		com.mojang.datafixers.util.Either<WorldChunk, ChunkHolder.Unloaded> e = holder.getBorderFuture().getNow(null);
@@ -286,6 +309,34 @@ final class WorldChunksSnapshot {
 		return new int[] { loaded.size(), missing, extra };
 	}
 
+	/** 調査用: スナップショットの予約された tick のうち、今のスケジューラーにないものの位置を出す。 */
+	void logMissingTicks(ServerWorld world, String when) {
+		java.util.Set<ScheduledTick<Block>> live = scheduler(world.getBlockTickScheduler()).savestate$getScheduledTickActions();
+		int missing = 0;
+		Map<Long, Integer> byChunk = new java.util.TreeMap<>();
+		for (ScheduledTick<Block> t : this.blockTicks) {
+			if (!live.contains(t)) {
+				missing++;
+				byChunk.merge(ChunkPos.toLong(t.pos.getX() >> 4, t.pos.getZ() >> 4), 1, Integer::sum);
+			}
+		}
+		if (missing > 0) {
+			StringBuilder sb = new StringBuilder();
+			int shown = 0;
+			for (Map.Entry<Long, Integer> e : byChunk.entrySet()) {
+				if (shown++ >= 8) {
+					break;
+				}
+				ChunkPos p = new ChunkPos(e.getKey());
+				boolean loaded = world.getChunk(p.x, p.z, ChunkStatus.FULL, false) != null;
+				sb.append(' ').append(p).append('x').append(e.getValue()).append(loaded ? "(loaded" : "(unloaded")
+					.append(this.journal.snapshotLoaded.contains(e.getKey()) ? ",snap" : ",notsnap")
+					.append(this.journal.loadedAfter.containsKey(e.getKey()) ? ",journal)" : ")");
+			}
+			SavestateDebug.log("{} {}: {} of {} snapshot block ticks missing; chunks:{}", when, world.getRegistryKey().getValue(), missing, this.blockTicks.size(), sb);
+		}
+	}
+
 	void activateJournal() {
 		this.journal.activate();
 	}
@@ -304,6 +355,10 @@ final class WorldChunksSnapshot {
 	 */
 	int[] restoreOutside(ServerWorld world, SharePolicy chunkPolicy, List<CompoundTag> entityTags) {
 		ServerChunkManager chunkManager = world.getChunkManager();
+		// 途中まで進んでいる「読み込みを外す処理」を先に終わらせ、各チャンクを「読み込まれている」か「外れて保存済み」のどちらかにする。
+		// 外す途中のチャンクも getChunk(..., false) では取れてしまい、そこへ記録の NBT やエンティティを入れると、
+		// 直後の取り外しで内容が失われたり、どのチャンクにも属さないエンティティが残ったりするため
+		flushUnloads(world);
 		int syncLoaded = 0;
 		for (long key : this.chunkKeys) {
 			ChunkPos pos = new ChunkPos(key);
@@ -313,22 +368,36 @@ final class WorldChunksSnapshot {
 			}
 		}
 
-		int applied = 0;
+		// 取得後に読み込まれたチャンク (loadedAfter) は、ここでは触らない。読み込み済みのチャンクの集合をそろえる段階ですべて外れるので、
+		// 外れた後に記録した NBT をディスクへ書き戻す (rewriteJournalChunks)。
+		// その場に当ててエンティティを入れる方式は、直後の取り外しとの順序の問題で、どのチャンクにも属さないエンティティが残った
+
+		this.restorePoi(world, chunkPolicy);
+		return new int[] { syncLoaded, 0, 0 };
+	}
+
+	/**
+	 * 読み込み済みのチャンクの集合をそろえた後 ({@link #convergeLoadedSet} の後) に呼ぶ。
+	 * 取得後に読み込まれたチャンクのうち、外れたものは記録した NBT をディスクに書き戻す (外すときに保存された取得後の内容を上書きする)。
+	 * 外れずに残ったもの (本来は起きない) は、NBT をその場で当て、エンティティの NBT を entityTags に足す。
+	 * 戻り値は {書き戻した数, その場で当てた数}。
+	 */
+	int[] rewriteJournalChunks(ServerWorld world, List<CompoundTag> entityTags) {
+		ServerChunkManager chunkManager = world.getChunkManager();
 		int rewritten = 0;
+		int applied = 0;
 		for (Map.Entry<Long, CompoundTag> e : this.journal.loadedAfter.entrySet()) {
 			ChunkPos pos = new ChunkPos(e.getKey());
 			WorldChunk chunk = (WorldChunk) world.getChunk(pos.x, pos.z, ChunkStatus.FULL, false);
-			if (chunk != null) {
-				entityTags.addAll(applyChunkNbt(world, chunk, e.getValue()));
-				applied++;
-			} else if (this.journal.written.contains(e.getKey())) {
+			if (chunk == null) {
 				chunkManager.threadedAnvilChunkStorage.setTagAt(pos, e.getValue());
 				rewritten++;
+			} else {
+				entityTags.addAll(applyChunkNbt(world, chunk, e.getValue()));
+				applied++;
 			}
 		}
-
-		this.restorePoi(world, chunkPolicy);
-		return new int[] { syncLoaded, applied, rewritten };
+		return new int[] { rewritten, applied };
 	}
 
 	private void restorePoi(ServerWorld world, SharePolicy chunkPolicy) {

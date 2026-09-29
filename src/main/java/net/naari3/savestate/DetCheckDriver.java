@@ -10,6 +10,13 @@ import java.util.Map;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.block.Blocks;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.boss.dragon.EnderDragonEntity;
+import net.minecraft.entity.damage.DamageSource;
+import net.minecraft.entity.decoration.EndCrystalEntity;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.world.GameMode;
+import net.minecraft.world.World;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.math.BlockPos;
@@ -35,7 +42,16 @@ public final class DetCheckDriver {
 	private static final boolean EXIT = Boolean.getBoolean("mcsr-savestate.detcheck.exit");
 	private static final int AUTO_SLOT = SavestateManager.SLOT_COUNT;
 	private static final int SETTLE_TICKS = 40;
-	private static final boolean DISTURB = Boolean.getBoolean("mcsr-savestate.detcheck.disturb");
+	/**
+	 * かき乱しの種類 (null ならかき乱さない)。
+	 * far: 取得時のチャンクを変更 → 同じディメンションで 800 ブロック先へ移動 → 新しいチャンクを変更
+	 * dim: 取得時のチャンクを変更 → 別のディメンションへ移動 (オーバーワールド ⇔ ネザー。エンドからはオーバーワールド) → そこでブロックを変更
+	 * end: ドラゴンに大ダメージを与え、エンドクリスタルを壊す → オーバーワールドへ移動 → そこでブロックを変更
+	 */
+	private static final String DISTURB = System.getProperty("mcsr-savestate.detcheck.disturb");
+	/** 取得する場所 (overworld / nether / end)。null ならワールドを開いた場所のまま。 */
+	private static final String START = System.getProperty("mcsr-savestate.detcheck.start");
+	private static boolean movedToStart;
 	/** 飛ばしてから元のチャンクの読み込みが外れて保存されるまで待つ tick 数。 */
 	private static final int DISTURB_FAR_TICKS = 400;
 	private static int disturbTicks;
@@ -96,6 +112,17 @@ public final class DetCheckDriver {
 				}
 				if (++settle >= SETTLE_TICKS && stableTicks >= STABLE_TICKS) {
 					SavestateMod.LOGGER.info("[DetCheck] chunks settled at {} after {} ticks", chunks, settle);
+					if (START != null && !movedToStart) {
+						movedToStart = true;
+						client.getServer().execute(() -> moveToStart(client.getServer()));
+						settle = 0;
+						stableTicks = 0;
+						break;
+					}
+					if ("end".equals(START) && !dragonPresent(client.getServer()) && settle < 1200) {
+						// エンドではドラゴンが出現するまで待つ
+						break;
+					}
 					state = State.SAVING;
 					slot = AUTO_SLOT;
 					SavestateMod.LOGGER.info("[DetCheck] saving slot {}", slot);
@@ -107,7 +134,7 @@ public final class DetCheckDriver {
 				if (run != null) {
 					results.add(run);
 					SavestateMod.LOGGER.info("[DetCheck] run {}/{} recorded ({} ticks)", results.size(), RUNS, run.size());
-					if (results.size() < RUNS && DISTURB) {
+					if (results.size() < RUNS && DISTURB != null) {
 						startDisturbance(client);
 					} else if (results.size() < RUNS) {
 						startNextRun(client);
@@ -139,21 +166,32 @@ public final class DetCheckDriver {
 	private static void startDisturbance(MinecraftClient client) {
 		state = State.DISTURBING;
 		disturbTicks = 0;
-		client.getServer().execute(() -> {
-			ServerPlayerEntity player = client.getServer().getPlayerManager().getPlayerList().get(0);
+		MinecraftServer server = client.getServer();
+		server.execute(() -> {
+			ServerPlayerEntity player = server.getPlayerManager().getPlayerList().get(0);
 			ServerWorld world = player.getServerWorld();
-			BlockPos base = player.getBlockPos().up(3);
-			for (int dx = -3; dx <= 3; dx++) {
-				for (int dz = -3; dz <= 3; dz++) {
-					world.setBlockState(base.add(dx, 0, dz), Blocks.GLASS.getDefaultState());
+			if ("end".equals(DISTURB)) {
+				disturbDragonFight(world);
+			} else {
+				BlockPos base = player.getBlockPos().up(3);
+				for (int dx = -3; dx <= 3; dx++) {
+					for (int dz = -3; dz <= 3; dz++) {
+						world.setBlockState(base.add(dx, 0, dz), Blocks.GLASS.getDefaultState());
+					}
 				}
+				SavestateMod.LOGGER.info("[DetCheck] disturbance: placed glass near {} in {}", base, world.getRegistryKey().getValue());
 			}
 			// 落下で死なないように飛行状態にする (能力は復元で戻る)
 			player.abilities.allowFlying = true;
 			player.abilities.flying = true;
 			player.sendAbilitiesUpdate();
-			player.teleport(world, player.getX() + 800, 200, player.getZ(), player.yaw, player.pitch);
-			SavestateMod.LOGGER.info("[DetCheck] disturbance: placed glass near {} and teleported player away", base);
+			if ("far".equals(DISTURB)) {
+				player.teleport(world, player.getX() + 800, 200, player.getZ(), player.yaw, player.pitch);
+			} else {
+				ServerWorld target = world.getRegistryKey() == World.OVERWORLD ? server.getWorld(World.NETHER) : server.getWorld(World.OVERWORLD);
+				player.teleport(target, player.getX(), 100, player.getZ(), player.yaw, player.pitch);
+			}
+			SavestateMod.LOGGER.info("[DetCheck] disturbance: player moved to {} {}", player.getServerWorld().getRegistryKey().getValue(), player.getBlockPos());
 		});
 	}
 
@@ -168,6 +206,54 @@ public final class DetCheckDriver {
 			}
 		}
 		SavestateMod.LOGGER.info("[DetCheck] disturbance: placed gold near {} (new chunks)", top);
+	}
+
+	/** ドラゴンに大ダメージを与え、エンドクリスタルをすべて壊す。 */
+	private static void disturbDragonFight(ServerWorld world) {
+		int crystals = 0;
+		for (Entity e : world.iterateEntities()) {
+			if (e instanceof EndCrystalEntity) {
+				crystals++;
+			}
+		}
+		List<Entity> toHit = new ArrayList<>();
+		for (Entity e : world.iterateEntities()) {
+			if (e instanceof EndCrystalEntity || e instanceof EnderDragonEntity) {
+				toHit.add(e);
+			}
+		}
+		for (Entity e : toHit) {
+			if (e instanceof EnderDragonEntity) {
+				EnderDragonEntity dragon = (EnderDragonEntity) e;
+				dragon.setHealth(dragon.getHealth() - 60);
+			} else {
+				e.damage(DamageSource.GENERIC, 1.0F);
+			}
+		}
+		SavestateMod.LOGGER.info("[DetCheck] disturbance: damaged the dragon and destroyed {} crystals", crystals);
+	}
+
+	private static boolean dragonPresent(MinecraftServer server) {
+		ServerWorld end = server.getWorld(World.END);
+		return end != null && !end.getAliveEnderDragons().isEmpty();
+	}
+
+	/** 取得する場所へプレイヤーを移す。クリエイティブにして、ドラゴンに狙われず、窒息や落下で死なないようにする。 */
+	private static void moveToStart(MinecraftServer server) {
+		ServerPlayerEntity player = server.getPlayerManager().getPlayerList().get(0);
+		player.setGameMode(GameMode.CREATIVE);
+		player.abilities.flying = true;
+		player.sendAbilitiesUpdate();
+		if ("nether".equals(START)) {
+			player.teleport(server.getWorld(World.NETHER), player.getX() / 8, 70, player.getZ() / 8, player.yaw, player.pitch);
+		} else if ("end".equals(START)) {
+			player.teleport(server.getWorld(World.END), 0, 90, 60, player.yaw, player.pitch);
+		} else {
+			ServerWorld ow = server.getWorld(World.OVERWORLD);
+			BlockPos spawn = ow.getSpawnPos();
+			player.teleport(ow, spawn.getX(), spawn.getY() + 2, spawn.getZ(), player.yaw, player.pitch);
+		}
+		SavestateMod.LOGGER.info("[DetCheck] moved player to start: {} {}", player.getServerWorld().getRegistryKey().getValue(), player.getBlockPos());
 	}
 
 	private static void startRuns(MinecraftClient client) {

@@ -25,8 +25,13 @@ loom {
 			if (project.hasProperty("savestateMode")) {
 				vmArg "-Dmcsr-savestate.mode=${project.property('savestateMode')}"
 			}
+			// かき乱し: -PdetcheckDisturb=far|dim|end
 			if (project.hasProperty("detcheckDisturb")) {
-				vmArg "-Dmcsr-savestate.detcheck.disturb=true"
+				vmArg "-Dmcsr-savestate.detcheck.disturb=${project.property('detcheckDisturb') ?: 'far'}"
+			}
+			// 取得する場所: -PdetcheckStart=overworld|nether|end
+			if (project.hasProperty("detcheckStart")) {
+				vmArg "-Dmcsr-savestate.detcheck.start=${project.property('detcheckStart')}"
 			}
 			if (project.hasProperty("detcheckDump")) {
 				vmArg "-Dmcsr-savestate.detcheck.dump=${project.property('detcheckDump')}"

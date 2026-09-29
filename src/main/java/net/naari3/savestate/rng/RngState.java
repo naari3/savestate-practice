@@ -153,7 +153,11 @@ public final class RngState {
 		out.put("rng math", MATH.describe());
 		out.put("rng shuffle", SHUFFLE.describe());
 		for (Map.Entry<String, StatefulRandom> e : STATICS.entrySet()) {
-			out.put("rng static " + e.getKey(), e.getValue().describe());
+			// 未シードのものは出さない (取得時にまだクラスが読み込まれていなかった static と、復元で未シードに戻したものは同じ扱い)
+			String d = e.getValue().describe();
+			if (!"unseeded".equals(d)) {
+				out.put("rng static " + e.getKey(), d);
+			}
 		}
 	}
 

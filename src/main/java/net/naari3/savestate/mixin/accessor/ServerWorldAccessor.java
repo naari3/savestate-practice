@@ -22,6 +22,13 @@ public interface ServerWorldAccessor {
 	@Accessor("worldProperties")
 	ServerWorldProperties savestate$getWorldProperties();
 
+	/** プレイヤーがいなくなってからの tick 数 (300 を超えるとエンティティの tick が止まる)。 */
+	@Accessor("idleTimeout")
+	int savestate$getIdleTimeout();
+
+	@Accessor("idleTimeout")
+	void savestate$setIdleTimeout(int value);
+
 	@Accessor("syncedBlockEventQueue")
 	ObjectLinkedOpenHashSet<BlockEvent> savestate$getSyncedBlockEventQueue();
 }
