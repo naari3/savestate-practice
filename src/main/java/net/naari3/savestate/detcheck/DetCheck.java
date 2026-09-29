@@ -136,6 +136,12 @@ public final class DetCheck {
 				}
 			}
 			h = h * 31 + chunk.getBlockEntities().size();
+			// ブロックエンティティの中身 (位置順に NBT の文字列)
+			List<net.minecraft.util.math.BlockPos> bePositions = new ArrayList<>(chunk.getBlockEntities().keySet());
+			bePositions.sort(null);
+			for (net.minecraft.util.math.BlockPos p : bePositions) {
+				h = h * 31 + chunk.getBlockEntities().get(p).toTag(new net.minecraft.nbt.CompoundTag()).toString().hashCode();
+			}
 			m.put("chunk " + w + " " + chunk.getPos().x + "," + chunk.getPos().z + " blocks", Long.toHexString(h));
 			all = all * 31 + h;
 		}

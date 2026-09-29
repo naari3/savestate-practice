@@ -25,6 +25,7 @@ import net.minecraft.world.level.ServerWorldProperties;
 import net.naari3.savestate.SavestateDebug;
 import net.naari3.savestate.SavestateMod;
 import net.naari3.savestate.mixin.accessor.EntityAccessor;
+import net.naari3.savestate.mixin.accessor.ScheduledTickAccessor;
 import net.naari3.savestate.mixin.accessor.ServerWorldAccessor;
 import net.naari3.savestate.mixin.accessor.WorldAccessor;
 import net.naari3.savestate.rng.RngState;
@@ -41,15 +42,18 @@ import net.naari3.savestate.rng.RngState;
  */
 public final class MemorySnapshot {
 	private static SharePolicy policy;
+	private static SharePolicy chunkPolicy;
 
 	private final Map<RegistryKey<World>, WorldSnap> worlds = new LinkedHashMap<>();
 	private final List<Entity> roots = new ArrayList<>();
 	private final CompoundTag rng;
 	private final int maxEntityId;
+	private final long scheduledTickIdCounter;
 
 	private static final class WorldSnap {
 		/** entitiesById の並び。要素は複製したエンティティ、またはプレイヤーの UUID。 */
 		final List<Object> order = new ArrayList<>();
+		WorldChunksSnapshot chunks;
 		long time;
 		long timeOfDay;
 		int rainTime;
@@ -63,21 +67,30 @@ public final class MemorySnapshot {
 		float thunderGradient;
 	}
 
-	private MemorySnapshot(CompoundTag rng, int maxEntityId) {
+	private MemorySnapshot(CompoundTag rng, int maxEntityId, long scheduledTickIdCounter) {
 		this.rng = rng;
 		this.maxEntityId = maxEntityId;
+		this.scheduledTickIdCounter = scheduledTickIdCounter;
 	}
 
 	private static synchronized SharePolicy policy() {
 		if (policy == null) {
-			policy = new SharePolicy(true);
+			policy = new SharePolicy(true, true);
 		}
 		return policy;
 	}
 
+	private static synchronized SharePolicy chunkPolicy() {
+		if (chunkPolicy == null) {
+			chunkPolicy = new SharePolicy(true, false);
+		}
+		return chunkPolicy;
+	}
+
 	public static MemorySnapshot capture(MinecraftServer server) {
 		long start = System.nanoTime();
-		MemorySnapshot snap = new MemorySnapshot(RngState.capture(server), EntityAccessor.savestate$getMaxEntityId().get());
+		MemorySnapshot snap = new MemorySnapshot(RngState.capture(server), EntityAccessor.savestate$getMaxEntityId().get(),
+			ScheduledTickAccessor.savestate$getIdCounter());
 		List<Entity> originals = new ArrayList<>();
 		for (ServerWorld world : server.getWorlds()) {
 			WorldSnap ws = new WorldSnap();
@@ -90,6 +103,7 @@ public final class MemorySnapshot {
 				}
 			}
 			captureWorldState(world, ws);
+			ws.chunks = WorldChunksSnapshot.capture(world, chunkPolicy());
 			snap.worlds.put(world.getRegistryKey(), ws);
 		}
 
@@ -106,7 +120,11 @@ public final class MemorySnapshot {
 		snap.roots.addAll(clones);
 
 		long ms = (System.nanoTime() - start) / 1_000_000L;
-		SavestateMod.LOGGER.info("[memory] captured {} entities in {} ms", clones.size(), ms);
+		int chunkCount = 0;
+		for (WorldSnap ws : snap.worlds.values()) {
+			chunkCount += ws.chunks.chunkCount();
+		}
+		SavestateMod.LOGGER.info("[memory] captured {} entities, {} chunks in {} ms", clones.size(), chunkCount, ms);
 		if (SavestateDebug.ENABLED) {
 			logCounts("capture", cloner.getClonedCounts());
 		}
@@ -124,8 +142,16 @@ public final class MemorySnapshot {
 		}
 
 		int restored = 0;
+		int[] chunkStats = new int[3];
 		for (ServerWorld world : server.getWorlds()) {
 			WorldSnap ws = this.worlds.get(world.getRegistryKey());
+			// チャンク (ブロック) を先に戻す。エンティティは戻したチャンクに入れる
+			if (ws != null) {
+				int[] s = ws.chunks.restore(world, chunkPolicy());
+				for (int k = 0; k < 3; k++) {
+					chunkStats[k] += s[k];
+				}
+			}
 			Int2ObjectMap<Entity> byId = ((ServerWorldAccessor) world).savestate$getEntitiesById();
 
 			// 1. 今のエンティティ (プレイヤー以外) を外す
@@ -180,9 +206,14 @@ public final class MemorySnapshot {
 
 		RngState.apply(server, this.rng);
 		restoreMaxEntityId(server);
+		ScheduledTickAccessor.savestate$setIdCounter(this.scheduledTickIdCounter);
 
 		long ms = (System.nanoTime() - start) / 1_000_000L;
-		SavestateMod.LOGGER.info("[memory] restored {} entities in {} ms", restored, ms);
+		SavestateMod.LOGGER.info("[memory] restored {} entities, {} chunks ({} missing, {} changed blocks) in {} ms",
+			restored, chunkStats[0], chunkStats[1], chunkStats[2], ms);
+		if (chunkStats[1] > 0) {
+			SavestateMod.LOGGER.warn("[memory] {} chunks from the snapshot are not loaded now and were not restored", chunkStats[1]);
+		}
 		if (SavestateDebug.ENABLED) {
 			logCounts("restore", cloner.getClonedCounts());
 		}

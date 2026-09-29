@@ -27,6 +27,7 @@ import net.minecraft.state.State;
 import net.minecraft.tag.Tag;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.collection.IdList;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.ChunkPos;
@@ -76,9 +77,15 @@ public final class SharePolicy {
 	private final Set<Object> registryEntries = Collections.newSetFromMap(new IdentityHashMap<>());
 	private final Map<Class<?>, Set<Object>> staticConstants = new ConcurrentHashMap<>();
 	private final boolean sharePlayers;
+	private final boolean shareChunkData;
 
-	public SharePolicy(boolean sharePlayers) {
+	/**
+	 * @param sharePlayers   プレイヤーを複製せず共有する
+	 * @param shareChunkData ChunkSection とブロックエンティティを複製せず共有する (エンティティの複製では共有、チャンクの複製では複製する)
+	 */
+	public SharePolicy(boolean sharePlayers, boolean shareChunkData) {
 		this.sharePlayers = sharePlayers;
+		this.shareChunkData = shareChunkData;
 		for (Registry<?> registry : Registry.REGISTRIES) {
 			this.registryEntries.add(registry);
 			for (Object entry : registry) {
@@ -97,10 +104,13 @@ public final class SharePolicy {
 			return true;
 		}
 		if (o instanceof World || o instanceof MinecraftServer || o instanceof ChunkManager || o instanceof ThreadedAnvilChunkStorage
-			|| o instanceof Chunk || o instanceof ChunkSection || o instanceof PlayerManager || o instanceof ServerPlayNetworkHandler
+			|| o instanceof Chunk || o instanceof PlayerManager || o instanceof ServerPlayNetworkHandler
 			|| o instanceof ClientConnection || o instanceof Scoreboard || o instanceof AbstractTeam || o instanceof BossBar
 			|| o instanceof Raid || o instanceof PersistentState || o instanceof SerializingRegionBasedStorage
-			|| o instanceof ServerTickScheduler || o instanceof Profiler || o instanceof BlockEntity) {
+			|| o instanceof ServerTickScheduler || o instanceof Profiler || o instanceof IdList) {
+			return true;
+		}
+		if (this.shareChunkData && (o instanceof ChunkSection || o instanceof BlockEntity)) {
 			return true;
 		}
 		if (this.sharePlayers && o instanceof ServerPlayerEntity) {

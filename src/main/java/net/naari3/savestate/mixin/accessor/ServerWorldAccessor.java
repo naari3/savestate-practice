@@ -1,6 +1,8 @@
 package net.naari3.savestate.mixin.accessor;
 
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+import it.unimi.dsi.fastutil.objects.ObjectLinkedOpenHashSet;
+import net.minecraft.server.world.BlockEvent;
 import java.util.List;
 import net.minecraft.entity.Entity;
 import net.minecraft.server.world.ServerWorld;
@@ -19,4 +21,7 @@ public interface ServerWorldAccessor {
 
 	@Accessor("worldProperties")
 	ServerWorldProperties savestate$getWorldProperties();
+
+	@Accessor("syncedBlockEventQueue")
+	ObjectLinkedOpenHashSet<BlockEvent> savestate$getSyncedBlockEventQueue();
 }
