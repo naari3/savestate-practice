@@ -26,6 +26,9 @@ import net.naari3.savestate.rng.RngState;
 public final class DetCheck {
 	private static final net.minecraft.network.PacketByteBuf SECTION_BUF = new net.minecraft.network.PacketByteBuf(io.netty.buffer.Unpooled.buffer());
 	private static volatile boolean armed;
+	private static int runIndex = -1;
+	/** 調査用: この UUID (先頭 8 文字) のエンティティを tick 0〜2 でファイルに書き出す。 */
+	private static final String DUMP_ENTITY = System.getProperty("mcsr-savestate.detcheck.dump");
 	private static volatile int ticksToRecord;
 	private static volatile List<Map<String, String>> recording;
 	private static volatile List<Map<String, String>> finished;
@@ -35,6 +38,7 @@ public final class DetCheck {
 
 	/** 次の loadstate の再開時点から ticks 回分を記録する。 */
 	public static void arm(int ticks) {
+		runIndex++;
 		ticksToRecord = ticks;
 		recording = null;
 		finished = null;
@@ -57,8 +61,8 @@ public final class DetCheck {
 		if (armed) {
 			armed = false;
 			List<Map<String, String>> r = new ArrayList<>();
-			r.add(snapshot(server));
 			recording = r;
+			r.add(snapshot(server));
 		}
 	}
 
@@ -82,7 +86,30 @@ public final class DetCheck {
 		return r;
 	}
 
+	private static void dumpEntity(MinecraftServer server, int tick) {
+		for (ServerWorld world : server.getWorlds()) {
+			for (Entity e : world.iterateEntities()) {
+				boolean match = DUMP_ENTITY.startsWith("type:")
+					? EntityType.getId(e.getType()).getPath().equals(DUMP_ENTITY.substring(5))
+					: e.getUuidAsString().startsWith(DUMP_ENTITY);
+				if (match) {
+					java.nio.file.Path out = net.fabricmc.loader.api.FabricLoader.getInstance().getGameDir().resolve("savestates")
+						.resolve("dump-" + e.getUuidAsString().substring(0, 8) + "-run" + runIndex + "-tick" + tick + ".txt");
+					try {
+						java.nio.file.Files.write(out, ObjectDumper.dump(e, 12));
+					} catch (java.io.IOException ex) {
+						throw new RuntimeException(ex);
+					}
+				}
+			}
+		}
+	}
+
 	private static Map<String, String> snapshot(MinecraftServer server) {
+		List<Map<String, String>> r = recording;
+		if (DUMP_ENTITY != null && r != null && r.size() < 3) {
+			dumpEntity(server, r.size());
+		}
 		Map<String, String> m = new TreeMap<>();
 		RngState.describeInto(m);
 		for (ServerWorld world : server.getWorlds()) {

@@ -103,6 +103,26 @@ public final class DeepCloner {
 		return out;
 	}
 
+	/** ルートを 1 つ登録する (充填は {@link #finish()} で行う)。 */
+	@SuppressWarnings("unchecked")
+	public <T> T mapRoot(T root) {
+		return (T) this.map(root);
+	}
+
+	/**
+	 * src のフィールドを dst (既存のオブジェクト) に写す。src への参照はすべて dst に対応させる。
+	 * 生きているオブジェクトを差し替えられない場合 (接続に結び付いたプレイヤーなど) に使う。充填は {@link #finish()} で行う。
+	 */
+	public void copyInto(Object src, Object dst) {
+		this.map.put(src, dst);
+		ClassInfo info = ClassInfo.of(src.getClass());
+		this.fillQueue.add(() -> this.copyFields(src, dst, info));
+	}
+
+	public void finish() {
+		this.drain();
+	}
+
 	/** 複製したクラスごとの個数 (調査用)。 */
 	public Map<Class<?>, Integer> getClonedCounts() {
 		return this.clonedCounts;
@@ -253,8 +273,18 @@ public final class DeepCloner {
 			return dst;
 		}
 		// ハッシュ・ソート系: 要素の割り当ては充填段階、投入は第 2 段階
+		if (c == HashSet.class && this.hasIdentityHashedElements(((Collection) o).toArray())) {
+			// 同一性ハッシュのキーは複製のたびにハッシュ値が変わり、HashSet の列挙順も変わる (= 処理の順序が回ごとに変わる)。
+			// 挿入順を保つ LinkedHashSet (HashSet のサブクラス) にして、保存時の列挙順に固定する
+			this.clonedCounts.merge(LinkedHashSet.class, 1, Integer::sum);
+			return this.rebuildCollection(o, new LinkedHashSet());
+		}
 		if (c == HashSet.class || c == LinkedHashSet.class) {
 			return this.rebuildCollection(o, (Collection) newInstance(c));
+		}
+		if (c == HashMap.class && this.hasIdentityHashedElements(((Map) o).keySet().toArray())) {
+			this.clonedCounts.merge(LinkedHashMap.class, 1, Integer::sum);
+			return this.rebuildMap(o, new LinkedHashMap());
 		}
 		if (c == TreeSet.class) {
 			return this.rebuildCollection(o, new TreeSet(((TreeSet) o).comparator()));
@@ -320,6 +350,36 @@ public final class DeepCloner {
 		}
 		warnOnce("unhandled JDK class shared as-is: " + n);
 		return this.put(o, o);
+	}
+
+	/** 複製される (共有されない) 要素のうち、hashCode を上書きしていない (同一性ハッシュの) ものがあるか。 */
+	private boolean hasIdentityHashedElements(Object[] elems) {
+		for (Object e : elems) {
+			if (e == null || e.getClass().isArray()) {
+				continue;
+			}
+			Class<?> ec = e.getClass();
+			boolean jdk = ClassInfo.isJdk(ec);
+			if (jdk || this.policy.isShared(e, ec, ClassInfo.of(ec))) {
+				continue;
+			}
+			if (!overridesHashCode(ec)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static final Map<Class<?>, Boolean> OVERRIDES_HASH = new ConcurrentHashMap<>();
+
+	private static boolean overridesHashCode(Class<?> c) {
+		return OVERRIDES_HASH.computeIfAbsent(c, k -> {
+			try {
+				return k.getMethod("hashCode").getDeclaringClass() != Object.class;
+			} catch (NoSuchMethodException e) {
+				return false;
+			}
+		});
 	}
 
 	private static boolean isEmptyCollection(Object o) {

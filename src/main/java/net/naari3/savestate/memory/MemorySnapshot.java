@@ -13,6 +13,7 @@ import net.minecraft.entity.boss.dragon.EnderDragonEntity;
 import net.minecraft.entity.boss.dragon.EnderDragonPart;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.PlayerManager;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.MathHelper;
@@ -46,12 +47,14 @@ public final class MemorySnapshot {
 
 	private final Map<RegistryKey<World>, WorldSnap> worlds = new LinkedHashMap<>();
 	private final List<Entity> roots = new ArrayList<>();
+	/** プレイヤーの複製 (UUID ごと)。復元では生きているプレイヤーに書き戻す。 */
+	private final Map<UUID, ServerPlayerEntity> players = new LinkedHashMap<>();
 	private final CompoundTag rng;
 	private final int maxEntityId;
 	private final long scheduledTickIdCounter;
 
 	private static final class WorldSnap {
-		/** entitiesById の並び。要素は複製したエンティティ、またはプレイヤーの UUID。 */
+		/** entitiesById の並び (複製したエンティティとプレイヤー)。 */
 		final List<Object> order = new ArrayList<>();
 		WorldChunksSnapshot chunks;
 		long time;
@@ -75,7 +78,7 @@ public final class MemorySnapshot {
 
 	private static synchronized SharePolicy policy() {
 		if (policy == null) {
-			policy = new SharePolicy(true, true);
+			policy = new SharePolicy(false, true);
 		}
 		return policy;
 	}
@@ -95,9 +98,7 @@ public final class MemorySnapshot {
 		for (ServerWorld world : server.getWorlds()) {
 			WorldSnap ws = new WorldSnap();
 			for (Entity e : ((ServerWorldAccessor) world).savestate$getEntitiesById().values()) {
-				if (e instanceof ServerPlayerEntity) {
-					ws.order.add(e.getUuid());
-				} else if (!(e instanceof EnderDragonPart)) {
+				if (!(e instanceof EnderDragonPart)) {
 					ws.order.add(e);
 					originals.add(e);
 				}
@@ -107,24 +108,28 @@ public final class MemorySnapshot {
 			snap.worlds.put(world.getRegistryKey(), ws);
 		}
 
-		// 全ワールドを 1 つの対応表で複製する (ワールドをまたぐ参照もそろえるため)
+		// 全ワールドのエンティティとプレイヤーを 1 つの対応表で複製する (乗り物、ターゲット、釣り針など、互いの参照をそろえるため)
 		DeepCloner cloner = new DeepCloner(policy());
 		List<Entity> clones = cloner.copyAll(originals);
 		IdentityHashMap<Object, Object> toClone = new IdentityHashMap<>();
 		for (int i = 0; i < originals.size(); i++) {
 			toClone.put(originals.get(i), clones.get(i));
+			if (clones.get(i) instanceof ServerPlayerEntity) {
+				snap.players.put(clones.get(i).getUuid(), (ServerPlayerEntity) clones.get(i));
+			} else {
+				snap.roots.add(clones.get(i));
+			}
 		}
 		for (WorldSnap ws : snap.worlds.values()) {
-			ws.order.replaceAll(o -> o instanceof Entity ? toClone.get(o) : o);
+			ws.order.replaceAll(toClone::get);
 		}
-		snap.roots.addAll(clones);
 
 		long ms = (System.nanoTime() - start) / 1_000_000L;
 		int chunkCount = 0;
 		for (WorldSnap ws : snap.worlds.values()) {
 			chunkCount += ws.chunks.chunkCount();
 		}
-		SavestateMod.LOGGER.info("[memory] captured {} entities, {} chunks in {} ms", clones.size(), chunkCount, ms);
+		SavestateMod.LOGGER.info("[memory] captured {} entities, {} players, {} chunks in {} ms", snap.roots.size(), snap.players.size(), chunkCount, ms);
 		if (SavestateDebug.ENABLED) {
 			logCounts("capture", cloner.getClonedCounts());
 		}
@@ -133,45 +138,68 @@ public final class MemorySnapshot {
 
 	public void restore(MinecraftServer server) {
 		long start = System.nanoTime();
-		// スナップショットはそのまま残し、そのまた複製を生きたワールドに入れる
-		DeepCloner cloner = new DeepCloner(policy());
-		List<Entity> fresh = cloner.copyAll(this.roots);
-		IdentityHashMap<Object, Entity> toFresh = new IdentityHashMap<>();
-		for (int i = 0; i < this.roots.size(); i++) {
-			toFresh.put(this.roots.get(i), fresh.get(i));
+		PlayerManager playerManager = server.getPlayerManager();
+
+		// 0. 別のディメンションにいるプレイヤーは、先に保存時のディメンションへ移す
+		Map<ServerPlayerEntity, PlayerBefore> before = new IdentityHashMap<>();
+		for (Map.Entry<UUID, ServerPlayerEntity> en : this.players.entrySet()) {
+			ServerPlayerEntity live = playerManager.getPlayer(en.getKey());
+			if (live == null) {
+				continue;
+			}
+			ServerPlayerEntity snapPlayer = en.getValue();
+			ServerWorld target = (ServerWorld) snapPlayer.world;
+			if (live.world != target) {
+				live.teleport(target, snapPlayer.getX(), snapPlayer.getY(), snapPlayer.getZ(), snapPlayer.yaw, snapPlayer.pitch);
+			}
+			before.put(live, new PlayerBefore(live));
 		}
 
-		int restored = 0;
 		int[] chunkStats = new int[3];
 		for (ServerWorld world : server.getWorlds()) {
 			WorldSnap ws = this.worlds.get(world.getRegistryKey());
-			// チャンク (ブロック) を先に戻す。エンティティは戻したチャンクに入れる
+			// 1. チャンク (ブロック) を先に戻す。エンティティは戻したチャンクに入れる
 			if (ws != null) {
 				int[] s = ws.chunks.restore(world, chunkPolicy());
 				for (int k = 0; k < 3; k++) {
 					chunkStats[k] += s[k];
 				}
 			}
+			// 2. 今のエンティティ (プレイヤー以外) を外す
 			Int2ObjectMap<Entity> byId = ((ServerWorldAccessor) world).savestate$getEntitiesById();
-
-			// 1. 今のエンティティ (プレイヤー以外) を外す
 			for (Entity e : new ArrayList<>(byId.values())) {
 				if (!(e instanceof ServerPlayerEntity) && !(e instanceof EnderDragonPart)) {
 					world.removeEntity(e);
 				}
 			}
 			byId.values().removeIf(e -> e instanceof EnderDragonPart);
+		}
+
+		// 3. スナップショットはそのまま残し、そのまた複製を作る。プレイヤーは生きているオブジェクトに書き戻す
+		DeepCloner cloner = new DeepCloner(policy());
+		for (ServerPlayerEntity live : before.keySet()) {
+			cloner.copyInto(this.players.get(live.getUuid()), live);
+		}
+		IdentityHashMap<Object, Entity> toFresh = new IdentityHashMap<>();
+		for (Entity root : this.roots) {
+			toFresh.put(root, cloner.mapRoot(root));
+		}
+		cloner.finish();
+
+		// 4. エンティティを入れ、entitiesById の並び (tick の順序) を保存時と同じにする
+		int restored = 0;
+		for (ServerWorld world : server.getWorlds()) {
+			WorldSnap ws = this.worlds.get(world.getRegistryKey());
 			if (ws == null) {
 				continue;
 			}
-
-			// 2. 複製を入れる
+			Int2ObjectMap<Entity> byId = ((ServerWorldAccessor) world).savestate$getEntitiesById();
 			Map<Integer, Entity> desired = new LinkedHashMap<>();
 			for (Object o : ws.order) {
-				if (o instanceof UUID) {
-					Entity player = world.getEntity((UUID) o);
-					if (player != null) {
-						desired.put(player.getEntityId(), player);
+				if (o instanceof ServerPlayerEntity) {
+					ServerPlayerEntity live = playerManager.getPlayer(((ServerPlayerEntity) o).getUuid());
+					if (live != null && live.world == world) {
+						desired.put(live.getEntityId(), live);
 					}
 					continue;
 				}
@@ -191,8 +219,7 @@ public final class MemorySnapshot {
 					}
 				}
 			}
-
-			// 3. entitiesById の並び (tick の順序) を保存時と同じにする。スナップショットにないもの (後から入ったプレイヤー) は末尾
+			// スナップショットにないもの (後から入ったプレイヤー) は末尾
 			for (Int2ObjectMap.Entry<Entity> en : byId.int2ObjectEntrySet()) {
 				desired.putIfAbsent(en.getIntKey(), en.getValue());
 			}
@@ -200,8 +227,12 @@ public final class MemorySnapshot {
 			for (Map.Entry<Integer, Entity> en : desired.entrySet()) {
 				byId.put((int) en.getKey(), en.getValue());
 			}
-
 			restoreWorldState(world, ws);
+		}
+
+		// 5. プレイヤーの後始末とクライアントへの同期
+		for (Map.Entry<ServerPlayerEntity, PlayerBefore> en : before.entrySet()) {
+			en.getValue().afterRestore(en.getKey());
 		}
 
 		RngState.apply(server, this.rng);

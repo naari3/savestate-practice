@@ -9,7 +9,11 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import net.minecraft.advancement.Advancement;
+import net.minecraft.advancement.PlayerAdvancementTracker;
 import net.minecraft.block.entity.BlockEntity;
+import net.minecraft.recipe.book.RecipeBook;
+import net.minecraft.stat.StatHandler;
 import net.minecraft.entity.EntityDimensions;
 import net.minecraft.entity.boss.BossBar;
 import net.minecraft.entity.data.TrackedData;
@@ -107,7 +111,8 @@ public final class SharePolicy {
 			|| o instanceof Chunk || o instanceof PlayerManager || o instanceof ServerPlayNetworkHandler
 			|| o instanceof ClientConnection || o instanceof Scoreboard || o instanceof AbstractTeam || o instanceof BossBar
 			|| o instanceof Raid || o instanceof PersistentState || o instanceof SerializingRegionBasedStorage
-			|| o instanceof ServerTickScheduler || o instanceof Profiler || o instanceof IdList) {
+			|| o instanceof ServerTickScheduler || o instanceof Profiler || o instanceof IdList
+			|| o instanceof PlayerAdvancementTracker || o instanceof Advancement || o instanceof StatHandler || o instanceof RecipeBook) {
 			return true;
 		}
 		if (this.shareChunkData && (o instanceof ChunkSection || o instanceof BlockEntity)) {
