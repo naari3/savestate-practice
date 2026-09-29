@@ -197,8 +197,11 @@ public final class MemorySnapshot {
 	 * 戻り値は取り消し用のスナップショット (makeUndo でないときは null)。「直前の load を取り消す」に使える。
 	 */
 	public MemorySnapshot restore(MinecraftServer server, boolean makeUndo) {
+		long t0 = System.nanoTime();
 		Prepared prepared = this.prepare(server);
+		long t1 = System.nanoTime();
 		MemorySnapshot undo = makeUndo ? capture(server) : null;
+		SavestateDebug.log("restore timing: prepare {} ms, undo capture {} ms", (t1 - t0) / 1_000_000L, (System.nanoTime() - t1) / 1_000_000L);
 		// 調査用: 故障の注入を有効にしているときは、ロールバックで元に戻ったかを比べるため、今の状態の要約を取っておく
 		Map<String, String> stateBefore = makeUndo && SavestateDebug.faultInjectionEnabled() ? DetCheck.describe(server) : null;
 
@@ -237,6 +240,26 @@ public final class MemorySnapshot {
 	public void dispose() {
 		for (WorldSnap ws : this.worlds.values()) {
 			ws.chunks.dispose();
+		}
+	}
+
+	/** 調査用: 段階ごとの経過時間。 */
+	private static final class PhaseTimer {
+		private final StringBuilder sb = new StringBuilder();
+		private long last = System.nanoTime();
+
+		void mark(String name) {
+			long now = System.nanoTime();
+			if (sb.length() > 0) {
+				sb.append(", ");
+			}
+			sb.append(name).append(' ').append((now - last) / 1_000_000L).append(" ms");
+			last = now;
+		}
+
+		@Override
+		public String toString() {
+			return sb.toString();
 		}
 	}
 
@@ -298,6 +321,9 @@ public final class MemorySnapshot {
 			before.put(live, new PlayerBefore(live));
 		}
 
+		PhaseTimer timer = new PhaseTimer();
+		timer.mark("teleport");
+
 		int[] chunkStats = new int[3];
 		int[] outsideStats = new int[3];
 		for (ServerWorld world : server.getWorlds()) {
@@ -310,6 +336,7 @@ public final class MemorySnapshot {
 				for (int k = 0; k < 3; k++) {
 					outsideStats[k] += o[k];
 				}
+				timer.mark(world.getRegistryKey().getValue().getPath() + " outside");
 				// 1b. 取得時に読み込まれていたチャンク
 				int[] s = ws.chunks.restore(world, pc);
 				for (int k = 0; k < 3; k++) {
@@ -324,6 +351,7 @@ public final class MemorySnapshot {
 				}
 			}
 			byId.values().removeIf(e -> e instanceof EnderDragonPart);
+			timer.mark(world.getRegistryKey().getValue().getPath() + " chunks+remove");
 		}
 
 		SavestateDebug.maybeInjectFault();
@@ -381,10 +409,13 @@ public final class MemorySnapshot {
 			restoreWorldState(world, ws);
 		}
 
+		timer.mark("entities");
+
 		// 5. プレイヤーの後始末とクライアントへの同期
 		for (Map.Entry<ServerPlayerEntity, PlayerBefore> en : before.entrySet()) {
 			en.getValue().afterRestore(en.getKey());
 		}
+		timer.mark("players");
 
 		// 6. 読み込み済みのチャンクの集合を取得時と同じにそろえ (取得後に読み込まれたチャンクを外し)、外れたチャンクに記録した NBT を書き戻す
 		for (ServerWorld world : server.getWorlds()) {
@@ -396,6 +427,7 @@ public final class MemorySnapshot {
 				ws.chunks.logMissingTicks(world, "before convergence");
 			}
 			int[] c = ws.chunks.convergeLoadedSet(world);
+			timer.mark(world.getRegistryKey().getValue().getPath() + " converge");
 			if (SavestateDebug.ENABLED) {
 				ws.chunks.logMissingTicks(world, "after convergence");
 			}
@@ -404,8 +436,9 @@ public final class MemorySnapshot {
 			outsideStats[1] += rw[1];
 			outsideStats[2] += rw[0];
 			spawnFromTags(world, leftover);
-			SavestateMod.LOGGER.info("[memory] {}: loaded chunk set converged after {} iterations: {} loaded, {} missing, {} extra",
-				world.getRegistryKey().getValue(), c[0], c[1], c[2], c[3]);
+			timer.mark(world.getRegistryKey().getValue().getPath() + " rewrite");
+			SavestateMod.LOGGER.info("[memory] {}: loaded chunk set converged after {} iterations in {} ms: {} loaded, {} missing, {} extra",
+				world.getRegistryKey().getValue(), c[0], c[1], c[2], c[3], c[4]);
 		}
 
 		RngState.apply(server, this.rng);
@@ -437,6 +470,7 @@ public final class MemorySnapshot {
 			}
 		}
 
+		SavestateDebug.log("apply timing: {}", timer);
 		long ms = (System.nanoTime() - start) / 1_000_000L;
 		SavestateMod.LOGGER.info("[memory] restored {} entities, {} chunks ({} missing, {} changed blocks), outside: {} sync-loaded, {} re-applied in place, {} rewritten on disk, in {} ms (apply only)",
 			restored, chunkStats[0], chunkStats[1], chunkStats[2], outsideStats[0], outsideStats[1], outsideStats[2], ms);

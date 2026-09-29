@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.locks.LockSupport;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
@@ -24,6 +25,7 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.network.PacketByteBuf;
 import net.minecraft.server.world.BlockEvent;
 import net.minecraft.server.world.ChunkHolder;
+import net.minecraft.server.world.ChunkTicketManager;
 import net.minecraft.server.world.ChunkTicketType;
 import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerLightingProvider;
@@ -75,6 +77,8 @@ final class WorldChunksSnapshot {
 	private Set<Long> tickingKeys;
 	/** POI のセクションごとの中身 (複製済み)。 */
 	private Map<Long, Optional<?>> poi;
+	/** 取得時にまだディスクへ保存されていなかった POI セクション (保存される順)。 */
+	private final List<Long> poiUnsaved = new ArrayList<>();
 	/** 取得後の、読み込み済みチャンク以外への変化の記録。 */
 	private ChunkJournal journal;
 
@@ -116,6 +120,7 @@ final class WorldChunksSnapshot {
 
 		SerializingRegionBasedStorageAccessor poiAcc = poiAccessor(world);
 		snap.poi = new DeepCloner(chunkPolicy).copy(new LinkedHashMap<Long, Optional<?>>(poiAcc.savestate$getLoadedElements()));
+		snap.poiUnsaved.addAll(poiAcc.savestate$getUnsavedElements());
 		snap.journal = new ChunkJournal(world, new HashSet<>(keys), poiAcc.savestate$getWorker());
 		for (BlockEntity be : world.blockEntities) {
 			snap.blockEntityOrder.add(be.getPos().toImmutable());
@@ -134,28 +139,35 @@ final class WorldChunksSnapshot {
 		return this.journal;
 	}
 
+	/** 復元中だけ取得時のチャンクを保持するチケット (期限なし)。 */
+	private static final ChunkTicketType<ChunkPos> RESTORE_TICKET = ChunkTicketType.create("mcsr_savestate_restore", Comparator.comparingLong(ChunkPos::toLong));
+	/** 1 回の待ちの上限。メインスレッドにタスクが届けば (ThreadExecutor.send が unpark する)、それより早く起きる。 */
+	private static final long WAIT_STEP_NANOS = 1_000_000L;
+	private static final long MAX_WAIT_NANOS = 10_000_000_000L;
+	/** 読み込み済みのチャンク数が変わらないまま、この時間たったらあきらめる (プレイヤーのチケットやチャンクの読み込みは非同期に進むので長めにとる)。 */
+	private static final long STABLE_NANOS = 3_000_000_000L;
+	private static final long PROGRESS_LOG_NANOS = 250_000_000L;
+
 	/**
 	 * 読み込み済みのチャンクの集合を、取得時と同じにそろえる (ワールドは進めない)。
 	 * チケットの期限切れの処理、チケットの反映、読み込みを外す処理、保留中のタスクの実行を、
 	 * 集合が取得時と同じになるか、変化しなくなるまで繰り返す。
 	 * 取得後に読み込まれたチャンクは、中身を取得時点相当に戻してあるので、外すときにその内容でディスクに保存される。
-	 * 戻り値は {繰り返した回数, そろえた後の読み込み済みチャンク数, 取得時にあって今ないチャンク数, 取得時になくて今あるチャンク数}。
+	 * 戻り値は {繰り返した回数, かかった時間 (ms), そろえた後の読み込み済みチャンク数, 取得時にあって今ないチャンク数, 取得時になくて今あるチャンク数}。
 	 */
-	/** 復元中だけ取得時のチャンクを保持するチケット (期限なし)。 */
-	private static final ChunkTicketType<ChunkPos> RESTORE_TICKET = ChunkTicketType.create("mcsr_savestate_restore", Comparator.comparingLong(ChunkPos::toLong));
-	private static final int WAIT_STEP_MS = 10;
-	private static final int MAX_WAIT_MS = 10000;
-	/** 変化がないまま、この回数繰り返したらあきらめる (プレイヤーのチケットやチャンクの読み込みは非同期に進むので長めにとる)。 */
-	private static final int STABLE_ITERATIONS = 300;
-
 	int[] convergeLoadedSet(ServerWorld world) {
 		ServerChunkManager chunkManager = world.getChunkManager();
 		ThreadedAnvilChunkStorageAccess tacs = (ThreadedAnvilChunkStorageAccess) chunkManager.threadedAnvilChunkStorage;
+		ChunkTicketManager ticketManager = ((ServerChunkManagerInvoker) chunkManager).savestate$getTicketManager();
 		Set<Long> wanted = this.journal.snapshotLoaded;
+		long begin = System.nanoTime();
+		long lastChange = begin;
+		long lastProgressLog = begin;
 		int iterations = 0;
-		int stable = 0;
 		int lastCount = -1;
 		int[] diff = new int[3];
+		int[] tickingDiff = new int[2];
+		boolean unloadPending = false;
 		// そろえる間は、取得時のチャンクに期限なしのチケット (FULL レベル) を付けて、読み込みが外れないようにする。
 		// プレイヤーのチケットが非同期に届くまでの間にレベルが下がって外れると、中のエンティティが NBT から作り直され、
 		// 実行時の状態 (AI など) が失われるため
@@ -163,12 +175,14 @@ final class WorldChunksSnapshot {
 			ChunkPos pos = new ChunkPos(k);
 			chunkManager.addTicket(RESTORE_TICKET, pos, 0, pos);
 		}
-		// プレイヤーのチケットの追加・削除は別スレッドのキュー (playerTicketThrottler) を経由して非同期に届き、
-		// チャンクの読み込みもワーカースレッドで進むので、少しずつ待ちながら繰り返す (最大 MAX_WAIT_MS)
-		for (; iterations < MAX_WAIT_MS / WAIT_STEP_MS; iterations++) {
+		// プレイヤーのチケットの追加・削除は、player ticket throttler を経由して 1 チャンクずつ届く
+		// (1 チャンク付けるごとに、そのチャンクが entity ticking になるのを待ってから次へ進む)。
+		// チャンクの読み込みもワーカースレッドで進むので、メインスレッドのタスクを実行しては、次のタスクが届くまで短く待つ、を繰り返す
+		while (true) {
+			iterations++;
 			// 期限付きのチケット (getChunk で付く unknown など、期限 1 tick) の期限切れを進める。
 			// 取得時のチャンクは上の RESTORE_TICKET で保持しているので、ここで一時チケットが外れても読み込みは外れない
-			((ChunkTicketManagerInvoker) ((ServerChunkManagerInvoker) chunkManager).savestate$getTicketManager()).savestate$purge();
+			((ChunkTicketManagerInvoker) ticketManager).savestate$purge();
 			((ServerChunkManagerInvoker) chunkManager).savestate$updateTickets();
 			tacs.savestate$unloadTick();
 			// executeQueuedTasks は 1 回で 1 つしか実行しないので、キューが空になるまで回す
@@ -177,22 +191,30 @@ final class WorldChunksSnapshot {
 			}
 			((ServerChunkManagerInvoker) chunkManager).savestate$updateTickets();
 			diff = loadedDiff(tacs, wanted);
-			int[] tickingDiff = tickingDiff(tacs, this.tickingKeys);
+			tickingDiff = tickingDiff(tacs, this.tickingKeys);
+			unloadPending = tacs.savestate$unloadPending();
 			// 集合がそろっても、読み込みを外す処理 (エンティティの取り外しと保存) はタスクとして後から走るので、それも終わるまで待つ
-			if (diff[1] == 0 && diff[2] == 0 && tickingDiff[0] == 0 && tickingDiff[1] == 0 && !tacs.savestate$unloadPending()) {
+			if (diff[1] == 0 && diff[2] == 0 && tickingDiff[0] == 0 && tickingDiff[1] == 0 && !unloadPending) {
 				break;
 			}
-			if (diff[0] == lastCount) {
-				if (++stable >= STABLE_ITERATIONS) {
-					break;
-				}
-			} else {
-				stable = 0;
-				lastCount = diff[0];
+			long now = System.nanoTime();
+			if (SavestateDebug.ENABLED && now - lastProgressLog >= PROGRESS_LOG_NANOS) {
+				lastProgressLog = now;
+				SavestateDebug.log("{}: converging, {} ms: loaded diff {}/{}, ticking diff {}/{}, unload pending {}, throttler {}",
+					world.getRegistryKey().getValue(), (now - begin) / 1_000_000L, diff[1], diff[2], tickingDiff[0], tickingDiff[1], unloadPending,
+					ticketManager.toDumpString());
 			}
-			try {
-				Thread.sleep(WAIT_STEP_MS);
-			} catch (InterruptedException e) {
+			if (diff[0] != lastCount) {
+				lastCount = diff[0];
+				lastChange = now;
+			} else if (now - lastChange >= STABLE_NANOS) {
+				break;
+			}
+			if (now - begin >= MAX_WAIT_NANOS) {
+				break;
+			}
+			LockSupport.parkNanos("mcsr-savestate: waiting for chunk tasks", WAIT_STEP_NANOS);
+			if (Thread.interrupted()) {
 				Thread.currentThread().interrupt();
 				break;
 			}
@@ -206,11 +228,11 @@ final class WorldChunksSnapshot {
 			this.logTicketSamples(world, tacs, wanted);
 		}
 		int[] td = tickingDiff(tacs, this.tickingKeys);
-		if (td[0] != 0 || td[1] != 0) {
-			SavestateMod.LOGGER.warn("[memory] {}: ticking chunk set differs from the snapshot ({} missing, {} extra)",
-				world.getRegistryKey().getValue(), td[0], td[1]);
+		if (td[0] != 0 || td[1] != 0 || unloadPending) {
+			SavestateMod.LOGGER.warn("[memory] {}: ticking chunk set differs from the snapshot ({} missing, {} extra), unload pending {}",
+				world.getRegistryKey().getValue(), td[0], td[1], unloadPending);
 		}
-		return new int[] { iterations, diff[0], diff[1], diff[2] };
+		return new int[] { iterations, (int) ((System.nanoTime() - begin) / 1_000_000L), diff[0], diff[1], diff[2] };
 	}
 
 	/** 調査用: 取得時とそろわなかったチャンクの読み込みレベルとチケットを、いくつか出す。 */
@@ -235,22 +257,22 @@ final class WorldChunksSnapshot {
 		}
 	}
 
-	/** チケットの変化を反映し、読み込みを外す処理が残らなくなるまで回す (最大 MAX_WAIT_MS)。 */
+	/** チケットの変化を反映し、読み込みを外す処理が残らなくなるまで回す (最大 MAX_WAIT_NANOS)。 */
 	static void flushUnloads(ServerWorld world) {
 		ServerChunkManager chunkManager = world.getChunkManager();
 		ThreadedAnvilChunkStorageAccess tacs = (ThreadedAnvilChunkStorageAccess) chunkManager.threadedAnvilChunkStorage;
-		for (int i = 0; i < MAX_WAIT_MS / WAIT_STEP_MS; i++) {
+		long begin = System.nanoTime();
+		while (true) {
 			((ServerChunkManagerInvoker) chunkManager).savestate$updateTickets();
 			tacs.savestate$unloadTick();
 			while (chunkManager.executeQueuedTasks()) {
 			}
 			((ServerChunkManagerInvoker) chunkManager).savestate$updateTickets();
-			if (!tacs.savestate$unloadPending()) {
+			if (!tacs.savestate$unloadPending() || System.nanoTime() - begin >= MAX_WAIT_NANOS) {
 				return;
 			}
-			try {
-				Thread.sleep(WAIT_STEP_MS);
-			} catch (InterruptedException e) {
+			LockSupport.parkNanos("mcsr-savestate: waiting for chunk tasks", WAIT_STEP_NANOS);
+			if (Thread.interrupted()) {
 				Thread.currentThread().interrupt();
 				return;
 			}
@@ -433,9 +455,12 @@ final class WorldChunksSnapshot {
 		acc.savestate$getLoadedElements().clear();
 		acc.savestate$getUnsavedElements().clear();
 		for (Map.Entry<Long, Optional<?>> e : fresh.entrySet()) {
-			long key = e.getKey();
-			acc.savestate$getLoadedElements().put(key, e.getValue());
-			// ディスクの内容が取得後に変わっているかもしれないので、戻した内容で書き直させる
+			acc.savestate$getLoadedElements().put(e.getKey(), e.getValue());
+		}
+		// 未保存のセクションも取得時と同じにする。取得後にディスクへ書かれた分は、下で取得時のディスクの内容に戻すので、
+		// メモリ・未保存の集合・ディスクの 3 つが取得時と同じになる
+		// (以前はすべてのセクションを未保存にしていたが、復元のたびに全セクションを書き直すことになり遅かった)
+		for (long key : this.poiUnsaved) {
 			acc.savestate$getUnsavedElements().add(key);
 		}
 		// 取得後に書き換えられたディスク上の POI を、書き換える前の内容に戻す
