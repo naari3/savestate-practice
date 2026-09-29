@@ -11,4 +11,28 @@ public interface WorldAccessor {
 
 	@Accessor("lcgBlockSeed")
 	void savestate$setLcgBlockSeed(int seed);
+
+	@Accessor("rainGradientPrev")
+	float savestate$getRainGradientPrev();
+
+	@Accessor("rainGradientPrev")
+	void savestate$setRainGradientPrev(float v);
+
+	@Accessor("rainGradient")
+	float savestate$getRainGradient();
+
+	@Accessor("rainGradient")
+	void savestate$setRainGradient(float v);
+
+	@Accessor("thunderGradientPrev")
+	float savestate$getThunderGradientPrev();
+
+	@Accessor("thunderGradientPrev")
+	void savestate$setThunderGradientPrev(float v);
+
+	@Accessor("thunderGradient")
+	float savestate$getThunderGradient();
+
+	@Accessor("thunderGradient")
+	void savestate$setThunderGradient(float v);
 }

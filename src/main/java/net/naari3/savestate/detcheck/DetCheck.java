@@ -24,6 +24,7 @@ import net.naari3.savestate.rng.RngState;
  * 同じスロットから複数回 load した記録を {@link #compare} で比べ、最初にずれた tick と項目を報告する。
  */
 public final class DetCheck {
+	private static final net.minecraft.network.PacketByteBuf SECTION_BUF = new net.minecraft.network.PacketByteBuf(io.netty.buffer.Unpooled.buffer());
 	private static volatile boolean armed;
 	private static volatile int ticksToRecord;
 	private static volatile List<Map<String, String>> recording;
@@ -45,6 +46,19 @@ public final class DetCheck {
 		if (armed) {
 			armed = false;
 			recording = new ArrayList<>();
+		}
+	}
+
+	/**
+	 * サーバースレッド。インメモリ方式の復元直後 (tick の合間) に呼ぶ。
+	 * 復元した状態をその場で tick 0 として記録する (次の記録は 1 tick 進んだ後)。
+	 */
+	public static void onResumeImmediate(MinecraftServer server) {
+		if (armed) {
+			armed = false;
+			List<Map<String, String>> r = new ArrayList<>();
+			r.add(snapshot(server));
+			recording = r;
 		}
 	}
 
@@ -90,17 +104,61 @@ public final class DetCheck {
 				}
 			}
 			m.put("world " + w + " entityCount", Integer.toString(count));
+			snapshotChunks(world, w, m);
 		}
 		return m;
 	}
 
-	/** runs[0] を基準に、他の回と tick ごとに比べた結果の文章を返す。 */
+	/**
+	 * 読み込み済みのチャンクごとに、ブロックの状態のハッシュを取る。
+	 * 全ブロックを毎 tick 数えると重いので、チャンク内の非空の ChunkSection について PalettedContainer の中身から計算する。
+	 */
+	private static void snapshotChunks(ServerWorld world, String w, Map<String, String> m) {
+		int loaded = 0;
+		long all = 17;
+		for (net.minecraft.server.world.ChunkHolder holder : ((ThreadedAnvilChunkStorageAccess) world.getChunkManager().threadedAnvilChunkStorage).savestate$chunkHolders()) {
+			net.minecraft.world.chunk.WorldChunk chunk = holder.getWorldChunk();
+			if (chunk == null) {
+				continue;
+			}
+			loaded++;
+			long h = 1;
+			for (net.minecraft.world.chunk.ChunkSection section : chunk.getSectionArray()) {
+				if (section == null || section.isEmpty()) {
+					h = h * 31;
+					continue;
+				}
+				// クライアントに送る形式 (パレット + データ配列) に書き出してハッシュを取る。4096 ブロックを 1 つずつ読むより速い
+				SECTION_BUF.clear();
+				section.toPacket(SECTION_BUF);
+				for (int i = 0; i < SECTION_BUF.writerIndex(); i++) {
+					h = h * 31 + SECTION_BUF.getByte(i);
+				}
+			}
+			h = h * 31 + chunk.getBlockEntities().size();
+			m.put("chunk " + w + " " + chunk.getPos().x + "," + chunk.getPos().z + " blocks", Long.toHexString(h));
+			all = all * 31 + h;
+		}
+		m.put("world " + w + " loadedChunks", Integer.toString(loaded));
+		m.put("world " + w + " scheduledBlockTicks", Integer.toString(world.getBlockTickScheduler().getTicks()));
+		m.put("world " + w + " scheduledFluidTicks", Integer.toString(world.getFluidTickScheduler().getTicks()));
+	}
+
+	/** runs[0] を基準に、他の回と tick ごとに比べた結果の文章を返す。runs が 3 回以上なら、runs[1] を基準にした比較も出す。 */
 	public static String compare(List<List<Map<String, String>>> runs) {
 		StringBuilder sb = new StringBuilder();
-		List<Map<String, String>> base = runs.get(0);
-		sb.append("runs=").append(runs.size()).append(" ticksPerRun=").append(base.size()).append('\n');
-		sb.append("tick 0 = RNG を適用して tick を再開した直後 (ワールドはまだ 1 tick も進んでいない)\n");
-		for (int r = 1; r < runs.size(); r++) {
+		sb.append("runs=").append(runs.size()).append(" ticksPerRun=").append(runs.get(0).size()).append('\n');
+		sb.append("tick 0 = 復元して tick を再開した直後 (ワールドはまだ 1 tick も進んでいない)\n");
+		compareAgainst(runs, 0, sb);
+		if (runs.size() >= 3) {
+			compareAgainst(runs, 1, sb);
+		}
+		return sb.toString();
+	}
+
+	private static void compareAgainst(List<List<Map<String, String>>> runs, int baseIndex, StringBuilder sb) {
+		List<Map<String, String>> base = runs.get(baseIndex);
+		for (int r = baseIndex + 1; r < runs.size(); r++) {
 			List<Map<String, String>> other = runs.get(r);
 			int n = Math.min(base.size(), other.size());
 			int first = -1;
@@ -116,7 +174,7 @@ public final class DetCheck {
 					}
 				}
 			}
-			sb.append("\n=== run ").append(r).append(" vs run 0 ===\n");
+			sb.append("\n=== run ").append(r).append(" vs run ").append(baseIndex).append(" ===\n");
 			if (first < 0) {
 				sb.append("IDENTICAL for all ").append(n).append(" ticks\n");
 				continue;
@@ -153,10 +211,13 @@ public final class DetCheck {
 				.forEach(e -> sb.append("  tick ").append(e.getValue()).append("  ").append(e.getKey())
 					.append("    e.g. ").append(exampleByCategory.get(e.getKey())).append('\n'));
 		}
-		return sb.toString();
 	}
 
 	private static String category(String key) {
+		if (key.startsWith("chunk ")) {
+			String[] p = key.split(" ");
+			return "chunk " + p[1] + " " + p[3];
+		}
 		if (key.startsWith("entity ")) {
 			String[] p = key.split(" ");
 			return "entity " + p[1] + " " + p[2] + " " + p[4];

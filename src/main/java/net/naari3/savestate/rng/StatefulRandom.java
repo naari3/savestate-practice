@@ -1,6 +1,7 @@
 package net.naari3.savestate.rng;
 
 import java.util.Random;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.nbt.CompoundTag;
 
@@ -24,11 +25,26 @@ public class StatefulRandom extends Random {
 	private double nextNextGaussian;
 	private boolean haveNextNextGaussian;
 	private volatile boolean seeded;
+	/**
+	 * true なら、サーバースレッド以外からの使用は保存対象の状態を動かさず、別の (保存しない) 乱数で答える。
+	 * static な Random は統合サーバーではクライアントとサーバーが共有しているため
+	 * (例: クライアント側のエンティティを作るときもセンサーの初期化で Sensor.RANDOM を引く)。
+	 */
+	private boolean serverOnly;
 
 	/** 遅延シード。 */
 	public StatefulRandom() {
 		super(0L);
 		this.seeded = false;
+	}
+
+	public StatefulRandom serverOnly() {
+		this.serverOnly = true;
+		return this;
+	}
+
+	private boolean useFallback() {
+		return this.serverOnly && !RngState.isServerThread();
 	}
 
 	public StatefulRandom(long seed) {
@@ -57,6 +73,9 @@ public class StatefulRandom extends Random {
 
 	@Override
 	protected int next(int bits) {
+		if (this.useFallback()) {
+			return ThreadLocalRandom.current().nextInt() >>> (32 - bits);
+		}
 		this.ensureSeeded();
 		AtomicLong s = this.state;
 		long oldSeed;
@@ -70,6 +89,9 @@ public class StatefulRandom extends Random {
 
 	@Override
 	public synchronized double nextGaussian() {
+		if (this.useFallback()) {
+			return ThreadLocalRandom.current().nextGaussian();
+		}
 		if (this.haveNextNextGaussian) {
 			this.haveNextNextGaussian = false;
 			return this.nextNextGaussian;

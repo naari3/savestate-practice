@@ -21,6 +21,10 @@ loom {
 				vmArg "-Dmcsr-savestate.detcheck.world=${project.property('detcheckWorld')}"
 				vmArg "-Dmcsr-savestate.detcheck.exit=true"
 			}
+			// 方式の切り替え: -PsavestateMode=disk (既定は memory)
+			if (project.hasProperty("savestateMode")) {
+				vmArg "-Dmcsr-savestate.mode=${project.property('savestateMode')}"
+			}
 			if (project.hasProperty("detcheckTicks")) {
 				vmArg "-Dmcsr-savestate.detcheck.ticks=${project.property('detcheckTicks')}"
 			}

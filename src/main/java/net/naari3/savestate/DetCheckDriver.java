@@ -10,6 +10,7 @@ import java.util.Map;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.TitleScreen;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.LiteralText;
 import net.naari3.savestate.detcheck.DetCheck;
 
@@ -30,6 +31,9 @@ public final class DetCheckDriver {
 	private static final boolean EXIT = Boolean.getBoolean("mcsr-savestate.detcheck.exit");
 	private static final int AUTO_SLOT = SavestateManager.SLOT_COUNT;
 	private static final int SETTLE_TICKS = 40;
+	private static final int STABLE_TICKS = 100;
+	private static int lastChunkCount = -1;
+	private static int stableTicks;
 
 	private enum State {
 		IDLE, SETTLE, SAVING, RUNNING
@@ -67,7 +71,23 @@ public final class DetCheckDriver {
 
 		switch (state) {
 			case SETTLE:
-				if (client.player != null && client.getServer() != null && ++settle >= SETTLE_TICKS) {
+				// 周囲のチャンクの読み込みが続いている間に save すると、回ごとに tick 対象のチャンクが増えてずれる。
+				// 読み込み済みのチャンク数が STABLE_TICKS の間変わらなくなるまで待つ
+				if (client.player == null || client.getServer() == null) {
+					break;
+				}
+				int chunks = 0;
+				for (ServerWorld w : client.getServer().getWorlds()) {
+					chunks += w.getChunkManager().getTotalChunksLoadedCount();
+				}
+				if (chunks != lastChunkCount) {
+					lastChunkCount = chunks;
+					stableTicks = 0;
+				} else {
+					stableTicks++;
+				}
+				if (++settle >= SETTLE_TICKS && stableTicks >= STABLE_TICKS) {
+					SavestateMod.LOGGER.info("[DetCheck] chunks settled at {} after {} ticks", chunks, settle);
 					state = State.SAVING;
 					slot = AUTO_SLOT;
 					SavestateMod.LOGGER.info("[DetCheck] saving slot {}", slot);

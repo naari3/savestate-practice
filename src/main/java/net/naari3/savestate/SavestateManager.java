@@ -20,7 +20,9 @@ import net.minecraft.world.level.storage.LevelStorage;
 import net.minecraft.world.poi.PointOfInterestStorage;
 import net.naari3.savestate.mixin.accessor.MinecraftServerAccessor;
 import net.naari3.savestate.mixin.accessor.SerializingRegionBasedStorageAccessor;
-import net.naari3.savestate.mixin.accessor.ThreadedAnvilChunkStorageInvoker;
+import net.naari3.savestate.detcheck.ThreadedAnvilChunkStorageAccess;
+import net.naari3.savestate.detcheck.DetCheck;
+import net.naari3.savestate.memory.MemorySnapshot;
 import net.naari3.savestate.rng.RngState;
 
 /**
@@ -32,6 +34,11 @@ import net.naari3.savestate.rng.RngState;
 public final class SavestateManager {
 	public static final int SLOT_COUNT = 9;
 	private static final String RNG_FILE = "mcsr-savestate-rng.dat";
+	/** memory (既定): インメモリ方式。disk: ワールドのフォルダを複製して開き直す方式 (フェーズ 1)。 */
+	public static final boolean MEMORY_MODE = !"disk".equals(System.getProperty("mcsr-savestate.mode", "memory"));
+	private static final MemorySnapshot[] memorySlots = new MemorySnapshot[SLOT_COUNT + 1];
+	/** memorySlots を取ったサーバー。別のワールドを開いたら (サーバーが変わったら) 使わない。 */
+	private static IntegratedServer memorySlotServer;
 
 	private static int currentSlot = 1;
 	private static volatile boolean busy = false;
@@ -66,7 +73,9 @@ public final class SavestateManager {
 	private static void changeSlot(MinecraftClient client, int delta) {
 		currentSlot = Math.floorMod(currentSlot - 1 + delta, SLOT_COUNT) + 1;
 		IntegratedServer server = client.getServer();
-		boolean exists = server != null && Files.isDirectory(slotDir(worldDirName(server), currentSlot));
+		boolean exists = MEMORY_MODE
+			? memorySlotServer == server && memorySlots[currentSlot] != null
+			: server != null && Files.isDirectory(slotDir(worldDirName(server), currentSlot));
 		overlay(client, "Slot " + currentSlot + (exists ? "" : " (empty)"));
 	}
 
@@ -76,6 +85,66 @@ public final class SavestateManager {
 
 	/** onSuccess はクライアントスレッドで呼ばれる。 */
 	public static void saveSlot(MinecraftClient client, int slot, Runnable onSuccess) {
+		if (MEMORY_MODE) {
+			saveMemory(client, slot, onSuccess);
+		} else {
+			saveDisk(client, slot, onSuccess);
+		}
+	}
+
+	private static void saveMemory(MinecraftClient client, int slot, Runnable onSuccess) {
+		IntegratedServer server = client.getServer();
+		if (server == null || busy) {
+			return;
+		}
+		busy = true;
+		long start = System.nanoTime();
+		server.submit(() -> MemorySnapshot.capture(server)).whenComplete((snap, t) -> client.execute(() -> {
+			busy = false;
+			if (t != null) {
+				SavestateMod.LOGGER.error("Failed to save state to memory slot {}", slot, t);
+				overlayError(client, "Failed to save slot " + slot + " (see log)");
+				return;
+			}
+			memorySlots[slot] = snap;
+			memorySlotServer = server;
+			long ms = (System.nanoTime() - start) / 1_000_000L;
+			overlay(client, "Saved slot " + slot + " (" + ms + " ms)");
+			if (onSuccess != null) {
+				onSuccess.run();
+			}
+		}));
+	}
+
+	private static boolean loadMemory(MinecraftClient client, int slot) {
+		IntegratedServer server = client.getServer();
+		if (server == null || busy) {
+			return false;
+		}
+		MemorySnapshot snap = memorySlotServer == server ? memorySlots[slot] : null;
+		if (snap == null) {
+			overlayError(client, "Slot " + slot + " is empty");
+			return false;
+		}
+		busy = true;
+		long start = System.nanoTime();
+		server.submit(() -> {
+			snap.restore(server);
+			DetCheck.onResumeImmediate(server);
+		}).whenComplete((v, t) -> client.execute(() -> {
+			busy = false;
+			if (t != null) {
+				SavestateMod.LOGGER.error("Failed to load state from memory slot {}", slot, t);
+				overlayError(client, "Failed to load slot " + slot + " (see log)");
+				return;
+			}
+			long ms = (System.nanoTime() - start) / 1_000_000L;
+			overlay(client, "Loaded slot " + slot + " (" + ms + " ms)");
+		}));
+		return true;
+	}
+
+	private static void saveDisk(MinecraftClient client, int slot, Runnable onSuccess) {
 		IntegratedServer server = client.getServer();
 		if (server == null || busy) {
 			return;
@@ -113,7 +182,7 @@ public final class SavestateManager {
 		// save(flush=true) はチャンク用の IO worker しか待たない。POI は別の worker が非同期で書くので明示的に待つ
 		for (ServerWorld world : server.getWorlds()) {
 			ThreadedAnvilChunkStorage tacs = world.getChunkManager().threadedAnvilChunkStorage;
-			PointOfInterestStorage poi = ((ThreadedAnvilChunkStorageInvoker) tacs).savestate$getPointOfInterestStorage();
+			PointOfInterestStorage poi = ((ThreadedAnvilChunkStorageAccess) tacs).savestate$getPointOfInterestStorage();
 			((SerializingRegionBasedStorageAccessor) poi).savestate$getWorker().completeAll().join();
 		}
 
@@ -143,6 +212,10 @@ public final class SavestateManager {
 
 	/** load を開始できたら true。 */
 	public static boolean loadSlot(MinecraftClient client, int slot) {
+		return MEMORY_MODE ? loadMemory(client, slot) : loadDisk(client, slot);
+	}
+
+	private static boolean loadDisk(MinecraftClient client, int slot) {
 		IntegratedServer server = client.getServer();
 		if (server == null || busy) {
 			return false;

@@ -59,7 +59,8 @@ public final class RngState {
 	}
 
 	public static StatefulRandom registerStatic(String name, StatefulRandom random) {
-		STATICS.put(name, random);
+		// static な Random はクライアントスレッドやワーカースレッドからも使われるので、サーバースレッドの分だけを保存対象にする
+		STATICS.put(name, random.serverOnly());
 		return random;
 	}
 
