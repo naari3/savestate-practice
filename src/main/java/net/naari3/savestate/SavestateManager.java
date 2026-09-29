@@ -39,6 +39,9 @@ public final class SavestateManager {
 	private static final MemorySnapshot[] memorySlots = new MemorySnapshot[SLOT_COUNT + 1];
 	/** memorySlots を取ったサーバー。別のワールドを開いたら (サーバーが変わったら) 使わない。 */
 	private static IntegratedServer memorySlotServer;
+	/** 直前の load の取り消し用 (load する直前の状態)。 */
+	private static MemorySnapshot lastUndo;
+	private static IntegratedServer lastUndoServer;
 
 	private static int currentSlot = 1;
 	private static volatile boolean busy = false;
@@ -65,6 +68,9 @@ public final class SavestateManager {
 		}
 		while (SavestateKeys.LOAD.wasPressed()) {
 			if (inWorld) load(client);
+		}
+		while (SavestateKeys.UNDO.wasPressed()) {
+			if (inWorld && MEMORY_MODE) undoLoad(client);
 		}
 
 		DetCheckDriver.onClientTick(client);
@@ -137,22 +143,63 @@ public final class SavestateManager {
 			overlayError(client, "Slot " + slot + " is empty");
 			return false;
 		}
+		restoreMemory(client, server, snap, "slot " + slot);
+		return true;
+	}
+
+	/** 直前の load (インメモリ方式) を取り消し、load する直前の状態に戻す。 */
+	private static void undoLoad(MinecraftClient client) {
+		IntegratedServer server = client.getServer();
+		if (server == null || busy) {
+			return;
+		}
+		MemorySnapshot undo = lastUndoServer == server ? lastUndo : null;
+		if (undo == null) {
+			overlayError(client, "Nothing to undo");
+			return;
+		}
+		// 取り消しの取り消しもできるように、ここでも取り消し用のスナップショットを取る (restoreMemory が lastUndo を入れ替える)
+		restoreMemory(client, server, undo, "undo");
+	}
+
+	/**
+	 * snap を復元する。復元の直前の状態を取り消し用のスナップショットとして取り、lastUndo に入れる。
+	 * 復元の途中で失敗した場合は、MemorySnapshot 側で取り消し用のスナップショットに戻される。
+	 */
+	private static void restoreMemory(MinecraftClient client, IntegratedServer server, MemorySnapshot snap, String label) {
 		busy = true;
 		long start = System.nanoTime();
 		server.submit(() -> {
-			snap.restore(server);
+			MemorySnapshot undo = snap.restore(server, true);
 			DetCheck.onResumeImmediate(server);
-		}).whenComplete((v, t) -> client.execute(() -> {
+			return undo;
+		}).whenComplete((undo, t) -> client.execute(() -> {
 			busy = false;
 			if (t != null) {
-				SavestateMod.LOGGER.error("Failed to load state from memory slot {}", slot, t);
-				overlayError(client, "Failed to load slot " + slot + " (see log)");
+				SavestateMod.LOGGER.error("Failed to load state ({})", label, t);
+				overlayError(client, "Failed to load " + label + " (see log)");
+				DetCheckDriver.onLoadFailed(client);
 				return;
 			}
+			MemorySnapshot old = lastUndo;
+			lastUndo = undo;
+			lastUndoServer = server;
+			// 取り消し用のスナップショットを捨てる。ただし、スロットや今入れたものと同じなら捨てない
+			if (old != null && old != undo && old != snap && !isSlotted(old)) {
+				old.dispose();
+			}
 			long ms = (System.nanoTime() - start) / 1_000_000L;
-			overlay(client, "Loaded slot " + slot + " (" + ms + " ms)");
+			overlay(client, "Loaded " + label + " (" + ms + " ms)");
 		}));
-		return true;
+	}
+
+	private static boolean isSlotted(MemorySnapshot s) {
+		for (MemorySnapshot m : memorySlots) {
+			if (m == s) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static void saveDisk(MinecraftClient client, int slot, Runnable onSuccess) {

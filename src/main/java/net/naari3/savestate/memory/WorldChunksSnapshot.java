@@ -353,7 +353,23 @@ final class WorldChunksSnapshot {
 	 * 記録した NBT から作るエンティティの NBT を entityTags に足す (エンティティの入れ替えの後で作る)。
 	 * 戻り値は {同期で読み込んだチャンク数, その場で当てたチャンク数, ディスクに書き戻したチャンク数}。
 	 */
-	int[] restoreOutside(ServerWorld world, SharePolicy chunkPolicy, List<CompoundTag> entityTags) {
+	/** 復元の準備で作る、生きたワールドに入れるための複製 (チャンクのデータと POI)。 */
+	static final class Prepared {
+		final List<Object[]> chunks;
+		final Map<Long, Optional<?>> poi;
+
+		Prepared(List<Object[]> chunks, Map<Long, Optional<?>> poi) {
+			this.chunks = chunks;
+			this.poi = poi;
+		}
+	}
+
+	/** 復元の準備。ワールドには手を入れず、スナップショットのまた複製を作る (失敗しても何も変わらない)。 */
+	Prepared prepare(SharePolicy chunkPolicy) {
+		return new Prepared(new DeepCloner(chunkPolicy).copyAll(this.chunkData), new DeepCloner(chunkPolicy).copy(this.poi));
+	}
+
+	int[] restoreOutside(ServerWorld world, Prepared prepared) {
 		ServerChunkManager chunkManager = world.getChunkManager();
 		// 途中まで進んでいる「読み込みを外す処理」を先に終わらせ、各チャンクを「読み込まれている」か「外れて保存済み」のどちらかにする。
 		// 外す途中のチャンクも getChunk(..., false) では取れてしまい、そこへ記録の NBT やエンティティを入れると、
@@ -372,7 +388,7 @@ final class WorldChunksSnapshot {
 		// 外れた後に記録した NBT をディスクへ書き戻す (rewriteJournalChunks)。
 		// その場に当ててエンティティを入れる方式は、直後の取り外しとの順序の問題で、どのチャンクにも属さないエンティティが残った
 
-		this.restorePoi(world, chunkPolicy);
+		this.restorePoi(world, prepared.poi);
 		return new int[] { syncLoaded, 0, 0 };
 	}
 
@@ -400,9 +416,8 @@ final class WorldChunksSnapshot {
 		return new int[] { rewritten, applied };
 	}
 
-	private void restorePoi(ServerWorld world, SharePolicy chunkPolicy) {
+	private void restorePoi(ServerWorld world, Map<Long, Optional<?>> fresh) {
 		SerializingRegionBasedStorageAccessor acc = poiAccessor(world);
-		Map<Long, Optional<?>> fresh = new DeepCloner(chunkPolicy).copy(this.poi);
 		// 取得後に読み込まれたセクション (取得時になかったもの) はメモリから外す。次に使われるときにディスクから読み直される
 		acc.savestate$getLoadedElements().clear();
 		acc.savestate$getUnsavedElements().clear();
@@ -513,8 +528,8 @@ final class WorldChunksSnapshot {
 	}
 
 	/** 戻したチャンクの数、見つからなかったチャンクの数、変わったブロックの数を返す。 */
-	int[] restore(ServerWorld world, SharePolicy chunkPolicy) {
-		List<Object[]> fresh = new DeepCloner(chunkPolicy).copyAll(this.chunkData);
+	int[] restore(ServerWorld world, Prepared prepared) {
+		List<Object[]> fresh = prepared.chunks;
 		ServerChunkManager chunkManager = world.getChunkManager();
 		ServerLightingProvider lighting = chunkManager.getLightingProvider();
 		Set<BlockEntity> removed = Collections.newSetFromMap(new IdentityHashMap<>());

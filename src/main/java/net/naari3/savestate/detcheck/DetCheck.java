@@ -86,6 +86,23 @@ public final class DetCheck {
 		return r;
 	}
 
+	/** 今の状態の要約 (検査と同じ内容)。 */
+	public static Map<String, String> describe(MinecraftServer server) {
+		return snapshot(server);
+	}
+
+	/** 2 つの要約の違いを 1 行で (違う項目の数と、最初のいくつか)。 */
+	public static String summarizeDiff(Map<String, String> a, Map<String, String> b) {
+		List<String> diffs = diffKeys(a, b);
+		StringBuilder sb = new StringBuilder();
+		sb.append(diffs.size()).append(" items differ");
+		for (int i = 0; i < Math.min(8, diffs.size()); i++) {
+			String k = diffs.get(i);
+			sb.append("; ").append(k).append(": ").append(a.get(k)).append(" -> ").append(b.get(k));
+		}
+		return sb.toString();
+	}
+
 	private static void dumpEntity(MinecraftServer server, int tick) {
 		for (ServerWorld world : server.getWorlds()) {
 			for (Entity e : world.iterateEntities()) {

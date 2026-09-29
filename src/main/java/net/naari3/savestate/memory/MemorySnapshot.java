@@ -29,6 +29,7 @@ import net.minecraft.world.chunk.WorldChunk;
 import net.minecraft.world.level.ServerWorldProperties;
 import net.naari3.savestate.SavestateDebug;
 import net.naari3.savestate.SavestateMod;
+import net.naari3.savestate.detcheck.DetCheck;
 import net.naari3.savestate.mixin.accessor.EntityAccessor;
 import net.naari3.savestate.mixin.accessor.PersistentStateManagerAccessor;
 import net.naari3.savestate.mixin.accessor.ScheduledTickAccessor;
@@ -172,17 +173,50 @@ public final class MemorySnapshot {
 		return snap;
 	}
 
-	public void restore(MinecraftServer server) {
+	/**
+	 * 復元する。
+	 *
+	 * 1. 準備: ワールドに手を入れずに、失敗しうる処理 (複製の作成、書き戻す値の計算) をすべて済ませる。ここで失敗したら何も変わらない
+	 * 2. 取り消し用のスナップショットを取る (makeUndo のとき)
+	 * 3. 適用: ワールドを書き換える。途中で例外が起きたら、取り消し用のスナップショットで元に戻す
+	 *
+	 * 戻り値は取り消し用のスナップショット (makeUndo でないときは null)。「直前の load を取り消す」に使える。
+	 */
+	public MemorySnapshot restore(MinecraftServer server, boolean makeUndo) {
+		Prepared prepared = this.prepare(server);
+		MemorySnapshot undo = makeUndo ? capture(server) : null;
+		// 調査用: 故障の注入を有効にしているときは、ロールバックで元に戻ったかを比べるため、今の状態の要約を取っておく
+		Map<String, String> stateBefore = makeUndo && SavestateDebug.faultInjectionEnabled() ? DetCheck.describe(server) : null;
+
 		List<ChunkJournal> journals = new ArrayList<>();
 		for (WorldSnap ws : this.worlds.values()) {
 			journals.add(ws.chunks.journal());
 		}
 		ChunkJournal.beginRestore(journals);
 		try {
-			this.restoreInner(server);
+			this.apply(server, prepared);
+		} catch (Throwable t) {
+			SavestateMod.LOGGER.error("[memory] restore failed while modifying the world", t);
+			if (undo != null) {
+				ChunkJournal.endRestore(journals);
+				journals.clear();
+				try {
+					undo.restore(server, false);
+					SavestateMod.LOGGER.warn("[memory] rolled back to the state before the failed restore");
+					if (stateBefore != null) {
+						SavestateMod.LOGGER.warn("[memory] [debug] after rollback: {}", DetCheck.summarizeDiff(stateBefore, DetCheck.describe(server)));
+					}
+				} catch (Throwable t2) {
+					SavestateMod.LOGGER.error("[memory] rollback also failed; the world may be in an inconsistent state", t2);
+				}
+			} else {
+				SavestateMod.LOGGER.error("[memory] no rollback snapshot; the world may be in an inconsistent state");
+			}
+			throw t instanceof RuntimeException ? (RuntimeException) t : new RuntimeException(t);
 		} finally {
 			ChunkJournal.endRestore(journals);
 		}
+		return undo;
 	}
 
 	/** このスナップショットを使わなくなったとき (スロットの上書き、別のワールドを開いたとき) に呼ぶ。 */
@@ -192,9 +226,48 @@ public final class MemorySnapshot {
 		}
 	}
 
-	private void restoreInner(MinecraftServer server) {
+	/** 準備段階の結果。 */
+	private static final class Prepared {
+		final Map<RegistryKey<World>, WorldChunksSnapshot.Prepared> chunks = new LinkedHashMap<>();
+		DeepCloner cloner;
+		final IdentityHashMap<Object, Entity> toFresh = new IdentityHashMap<>();
+		final List<PersistentState> touchedStates = new ArrayList<>();
+		final List<Runnable> pendingPuts = new ArrayList<>();
+	}
+
+	/** 準備: ワールドには手を入れない。 */
+	private Prepared prepare(MinecraftServer server) {
+		Prepared p = new Prepared();
+		for (Map.Entry<RegistryKey<World>, WorldSnap> e : this.worlds.entrySet()) {
+			p.chunks.put(e.getKey(), e.getValue().chunks.prepare(chunkPolicy()));
+		}
+		// スナップショットはそのまま残し、そのまた複製を作る。プレイヤーとワールド全体の状態は、生きているオブジェクトへ書き戻す値を計算しておく
+		DeepCloner cloner = new DeepCloner(policy());
+		for (Map.Entry<UUID, ServerPlayerEntity> en : this.players.entrySet()) {
+			ServerPlayerEntity live = server.getPlayerManager().getPlayer(en.getKey());
+			if (live != null) {
+				cloner.copyIntoDeferred(en.getValue(), live);
+			}
+		}
+		for (ServerWorld world : server.getWorlds()) {
+			WorldSnap ws = this.worlds.get(world.getRegistryKey());
+			if (ws != null) {
+				this.bindWorldLevel(world, ws, cloner, p.touchedStates, p.pendingPuts);
+			}
+		}
+		for (Entity root : this.roots) {
+			p.toFresh.put(root, cloner.mapRoot(root));
+		}
+		cloner.finish();
+		p.cloner = cloner;
+		return p;
+	}
+
+	/** 適用: ワールドを書き換える。 */
+	private void apply(MinecraftServer server, Prepared prepared) {
 		long start = System.nanoTime();
 		PlayerManager playerManager = server.getPlayerManager();
+		IdentityHashMap<Object, Entity> toFresh = prepared.toFresh;
 
 		// 0. 別のディメンションにいるプレイヤーは、先に保存時のディメンションへ移す
 		Map<ServerPlayerEntity, PlayerBefore> before = new IdentityHashMap<>();
@@ -213,20 +286,18 @@ public final class MemorySnapshot {
 
 		int[] chunkStats = new int[3];
 		int[] outsideStats = new int[3];
-		Map<ServerWorld, List<CompoundTag>> journalEntities = new IdentityHashMap<>();
 		for (ServerWorld world : server.getWorlds()) {
 			WorldSnap ws = this.worlds.get(world.getRegistryKey());
 			// 1. チャンク (ブロック) を先に戻す。エンティティは戻したチャンクに入れる
 			if (ws != null) {
+				WorldChunksSnapshot.Prepared pc = prepared.chunks.get(world.getRegistryKey());
 				// 1a. 取得時に読み込まれていなかったチャンク、今は読み込まれていないチャンク、POI
-				List<CompoundTag> tags = new ArrayList<>();
-				journalEntities.put(world, tags);
-				int[] o = ws.chunks.restoreOutside(world, chunkPolicy(), tags);
+				int[] o = ws.chunks.restoreOutside(world, pc);
 				for (int k = 0; k < 3; k++) {
 					outsideStats[k] += o[k];
 				}
 				// 1b. 取得時に読み込まれていたチャンク
-				int[] s = ws.chunks.restore(world, chunkPolicy());
+				int[] s = ws.chunks.restore(world, pc);
 				for (int k = 0; k < 3; k++) {
 					chunkStats[k] += s[k];
 				}
@@ -241,24 +312,14 @@ public final class MemorySnapshot {
 			byId.values().removeIf(e -> e instanceof EnderDragonPart);
 		}
 
-		// 3. スナップショットはそのまま残し、そのまた複製を作る。プレイヤーは生きているオブジェクトに書き戻す
-		DeepCloner cloner = new DeepCloner(policy());
-		for (ServerPlayerEntity live : before.keySet()) {
-			cloner.copyInto(this.players.get(live.getUuid()), live);
+		SavestateDebug.maybeInjectFault();
+
+		// 3. プレイヤーとワールド全体の状態に、準備で計算した値を書き込む
+		prepared.cloner.applyDeferredWrites();
+		for (Runnable put : prepared.pendingPuts) {
+			put.run();
 		}
-		List<PersistentState> touchedStates = new ArrayList<>();
-		for (ServerWorld world : server.getWorlds()) {
-			WorldSnap ws = this.worlds.get(world.getRegistryKey());
-			if (ws != null) {
-				this.bindWorldLevel(world, ws, cloner, touchedStates);
-			}
-		}
-		IdentityHashMap<Object, Entity> toFresh = new IdentityHashMap<>();
-		for (Entity root : this.roots) {
-			toFresh.put(root, cloner.mapRoot(root));
-		}
-		cloner.finish();
-		for (PersistentState state : touchedStates) {
+		for (PersistentState state : prepared.touchedStates) {
 			state.markDirty();
 		}
 
@@ -311,39 +372,26 @@ public final class MemorySnapshot {
 			en.getValue().afterRestore(en.getKey());
 		}
 
-		// 6. 読み込み済みのチャンクの集合を取得時と同じにそろえる (取得後に読み込まれたチャンクを外す)
+		// 6. 読み込み済みのチャンクの集合を取得時と同じにそろえ (取得後に読み込まれたチャンクを外し)、外れたチャンクに記録した NBT を書き戻す
 		for (ServerWorld world : server.getWorlds()) {
 			WorldSnap ws = this.worlds.get(world.getRegistryKey());
-			if (ws != null) {
-				if (SavestateDebug.ENABLED) {
-					ws.chunks.logMissingTicks(world, "before convergence");
-				}
-				int[] c = ws.chunks.convergeLoadedSet(world);
-				if (SavestateDebug.ENABLED) {
-					ws.chunks.logMissingTicks(world, "after convergence");
-				}
-				List<CompoundTag> leftover = new ArrayList<>();
-				int[] rw = ws.chunks.rewriteJournalChunks(world, leftover);
-				outsideStats[1] += rw[1];
-				outsideStats[2] += rw[0];
-				spawnFromTags(world, leftover);
-				if (SavestateDebug.ENABLED) {
-					int orphan = 0;
-					for (Entity e : world.iterateEntities()) {
-						if (world.getChunk(e.chunkX, e.chunkZ, ChunkStatus.FULL, false) == null) {
-							if (orphan++ < 5) {
-								SavestateDebug.log("entity without loaded chunk: {} at {} chunk=({}, {}) inSnapshotChunks={} fromSnapshot={}",
-									e.getType(), e.getBlockPos(), e.chunkX, e.chunkZ,
-									ws.chunks.journal().snapshotLoaded.contains(net.minecraft.util.math.ChunkPos.toLong(e.chunkX, e.chunkZ)),
-									toFresh.containsValue(e));
-							}
-						}
-					}
-					SavestateDebug.log("{}: {} entities without a loaded chunk after convergence", world.getRegistryKey().getValue(), orphan);
-				}
-				SavestateMod.LOGGER.info("[memory] {}: loaded chunk set converged after {} iterations: {} loaded, {} missing, {} extra",
-					world.getRegistryKey().getValue(), c[0], c[1], c[2], c[3]);
+			if (ws == null) {
+				continue;
 			}
+			if (SavestateDebug.ENABLED) {
+				ws.chunks.logMissingTicks(world, "before convergence");
+			}
+			int[] c = ws.chunks.convergeLoadedSet(world);
+			if (SavestateDebug.ENABLED) {
+				ws.chunks.logMissingTicks(world, "after convergence");
+			}
+			List<CompoundTag> leftover = new ArrayList<>();
+			int[] rw = ws.chunks.rewriteJournalChunks(world, leftover);
+			outsideStats[1] += rw[1];
+			outsideStats[2] += rw[0];
+			spawnFromTags(world, leftover);
+			SavestateMod.LOGGER.info("[memory] {}: loaded chunk set converged after {} iterations: {} loaded, {} missing, {} extra",
+				world.getRegistryKey().getValue(), c[0], c[1], c[2], c[3]);
 		}
 
 		RngState.apply(server, this.rng);
@@ -351,13 +399,13 @@ public final class MemorySnapshot {
 		ScheduledTickAccessor.savestate$setIdCounter(this.scheduledTickIdCounter);
 
 		long ms = (System.nanoTime() - start) / 1_000_000L;
-		SavestateMod.LOGGER.info("[memory] restored {} entities, {} chunks ({} missing, {} changed blocks), outside: {} sync-loaded, {} re-applied in place, {} rewritten on disk, in {} ms",
+		SavestateMod.LOGGER.info("[memory] restored {} entities, {} chunks ({} missing, {} changed blocks), outside: {} sync-loaded, {} re-applied in place, {} rewritten on disk, in {} ms (apply only)",
 			restored, chunkStats[0], chunkStats[1], chunkStats[2], outsideStats[0], outsideStats[1], outsideStats[2], ms);
 		if (chunkStats[1] > 0) {
 			SavestateMod.LOGGER.warn("[memory] {} chunks from the snapshot are not loaded now and were not restored", chunkStats[1]);
 		}
 		if (SavestateDebug.ENABLED) {
-			logCounts("restore", cloner.getClonedCounts());
+			logCounts("restore", prepared.cloner.getClonedCounts());
 		}
 	}
 
@@ -365,27 +413,28 @@ public final class MemorySnapshot {
 	 * ワールド全体の状態 (スポーンの管理、PersistentState、ドラゴン戦) を、生きているオブジェクトへの書き戻しとして複製器に登録する。
 	 * エンティティと同じ対応表なので、レイドの参加者やドラゴン戦の水晶などの参照は、戻したエンティティを指す。
 	 */
-	private void bindWorldLevel(ServerWorld world, WorldSnap ws, DeepCloner cloner, List<PersistentState> touchedStates) {
+	private void bindWorldLevel(ServerWorld world, WorldSnap ws, DeepCloner cloner, List<PersistentState> touchedStates, List<Runnable> pendingPuts) {
 		List<Spawner> liveSpawners = ((ServerWorldAccessor) world).savestate$getSpawners();
 		for (int i = 0; i < Math.min(liveSpawners.size(), ws.spawners.size()); i++) {
 			if (liveSpawners.get(i).getClass() == ws.spawners.get(i).getClass()) {
-				cloner.copyInto(ws.spawners.get(i), liveSpawners.get(i));
+				cloner.copyIntoDeferred(ws.spawners.get(i), liveSpawners.get(i));
 			}
 		}
 		Map<String, PersistentState> liveStates = persistentStates(world);
 		for (Map.Entry<String, PersistentState> e : ws.states.entrySet()) {
 			PersistentState live = liveStates.get(e.getKey());
 			if (live != null && live.getClass() == e.getValue().getClass()) {
-				cloner.copyInto(e.getValue(), live);
+				cloner.copyIntoDeferred(e.getValue(), live);
 				touchedStates.add(live);
 			} else if (live == null) {
 				PersistentState fresh = cloner.mapRoot(e.getValue());
-				liveStates.put(e.getKey(), fresh);
+				String key = e.getKey();
+				pendingPuts.add(() -> liveStates.put(key, fresh));
 				touchedStates.add(fresh);
 			}
 		}
 		if (ws.dragonFight != null && world.getEnderDragonFight() != null) {
-			cloner.copyInto(ws.dragonFight, world.getEnderDragonFight());
+			cloner.copyIntoDeferred(ws.dragonFight, world.getEnderDragonFight());
 		}
 	}
 

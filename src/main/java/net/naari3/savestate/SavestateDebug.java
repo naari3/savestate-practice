@@ -6,6 +6,20 @@ import net.naari3.savestate.rng.StatefulRandom;
 /** 調査用のログ。-Dmcsr-savestate.debug=true のときだけ出す。 */
 public final class SavestateDebug {
 	public static final boolean ENABLED = Boolean.getBoolean("mcsr-savestate.debug");
+	/** 調査用: N 回目の復元 (インメモリ方式) の適用段階で、わざと例外を投げる (0 なら投げない)。 */
+	private static final int FAIL_APPLY_AT = Integer.getInteger("mcsr-savestate.debug.failApply", 0);
+	private static int restoreCount;
+
+	public static boolean faultInjectionEnabled() {
+		return FAIL_APPLY_AT > 0;
+	}
+
+	/** 復元の適用段階から呼ぶ。N 回目なら例外を投げる。 */
+	public static void maybeInjectFault() {
+		if (FAIL_APPLY_AT > 0 && ++restoreCount == FAIL_APPLY_AT) {
+			throw new IllegalStateException("[debug] injected failure during restore #" + restoreCount);
+		}
+	}
 
 	private SavestateDebug() {
 	}

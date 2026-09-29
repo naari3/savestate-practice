@@ -33,6 +33,10 @@ loom {
 			if (project.hasProperty("detcheckStart")) {
 				vmArg "-Dmcsr-savestate.detcheck.start=${project.property('detcheckStart')}"
 			}
+			// 故障の注入: -PfailApply=N (N 回目の復元の適用段階で例外を投げる)
+			if (project.hasProperty("failApply")) {
+				vmArg "-Dmcsr-savestate.debug.failApply=${project.property('failApply')}"
+			}
 			if (project.hasProperty("detcheckDump")) {
 				vmArg "-Dmcsr-savestate.detcheck.dump=${project.property('detcheckDump')}"
 			}

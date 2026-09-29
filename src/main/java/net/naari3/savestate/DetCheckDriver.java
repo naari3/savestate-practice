@@ -256,6 +256,14 @@ public final class DetCheckDriver {
 		SavestateMod.LOGGER.info("[DetCheck] moved player to start: {} {}", player.getServerWorld().getRegistryKey().getValue(), player.getBlockPos());
 	}
 
+	/** 検査中に load が失敗したら (故障の注入など)、同じ回をやり直す。 */
+	static void onLoadFailed(MinecraftClient client) {
+		if (state == State.RUNNING) {
+			SavestateMod.LOGGER.warn("[DetCheck] load failed; retrying run {}", results.size() + 1);
+			startNextRun(client);
+		}
+	}
+
 	private static void startRuns(MinecraftClient client) {
 		results.clear();
 		state = State.RUNNING;

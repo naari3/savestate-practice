@@ -77,6 +77,8 @@ public final class DeepCloner {
 	private final List<Runnable> deferred = new ArrayList<>();
 	private final Map<Class<?>, Integer> clonedCounts = new HashMap<>();
 	private final Set<Object> forced = Collections.newSetFromMap(new IdentityHashMap<>());
+	/** {dst, ClassInfo, 値の配列}。 */
+	private final List<Object[]> deferredWrites = new ArrayList<>();
 
 	public DeepCloner(SharePolicy policy) {
 		this.policy = policy;
@@ -130,6 +132,45 @@ public final class DeepCloner {
 
 	public void finish() {
 		this.drain();
+	}
+
+	/**
+	 * {@link #copyInto} と同じだが、dst には書き込まず、書き込む値を計算して溜めておく ({@link #applyDeferredWrites} で書き込む)。
+	 * 復元の準備段階で、生きているオブジェクトに手を入れずに、失敗しうる複製をすべて済ませるために使う。
+	 */
+	public void copyIntoDeferred(Object src, Object dst) {
+		this.map.put(src, dst);
+		ClassInfo info = ClassInfo.of(src.getClass());
+		Object[] values = new Object[info.fields.length];
+		this.deferredWrites.add(new Object[] { dst, info, values });
+		this.fillQueue.add(() -> {
+			for (int i = 0; i < info.fields.length; i++) {
+				Field f = info.fields[i];
+				try {
+					Object v = f.get(src);
+					values[i] = f.getType().isPrimitive() ? v : this.map(v);
+				} catch (IllegalAccessException e) {
+					throw new IllegalStateException("cannot read field " + f, e);
+				}
+			}
+		});
+	}
+
+	/** {@link #copyIntoDeferred} で溜めた値を書き込む ({@link #finish} の後に呼ぶ)。 */
+	public void applyDeferredWrites() {
+		for (Object[] w : this.deferredWrites) {
+			Object dst = w[0];
+			ClassInfo info = (ClassInfo) w[1];
+			Object[] values = (Object[]) w[2];
+			for (int i = 0; i < info.fields.length; i++) {
+				try {
+					info.fields[i].set(dst, values[i]);
+				} catch (IllegalAccessException e) {
+					throw new IllegalStateException("cannot write field " + info.fields[i], e);
+				}
+			}
+		}
+		this.deferredWrites.clear();
 	}
 
 	/** 複製したクラスごとの個数 (調査用)。 */

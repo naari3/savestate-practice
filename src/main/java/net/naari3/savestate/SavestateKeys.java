@@ -14,6 +14,8 @@ public final class SavestateKeys {
 	public static final KeyBinding LOAD = new KeyBinding("Load state", GLFW.GLFW_KEY_F7, CATEGORY);
 	public static final KeyBinding NEXT_SLOT = new KeyBinding("Next slot", GLFW.GLFW_KEY_F8, CATEGORY);
 	public static final KeyBinding PREV_SLOT = new KeyBinding("Previous slot", GLFW.GLFW_KEY_UNKNOWN, CATEGORY);
+	/** 直前の load を取り消す (初期状態では割り当てなし)。 */
+	public static final KeyBinding UNDO = new KeyBinding("Undo last load", GLFW.GLFW_KEY_UNKNOWN, CATEGORY);
 	/** 決定論の検査 (debug 時のみ登録)。 */
 	public static final KeyBinding DETCHECK = SavestateDebug.ENABLED
 		? new KeyBinding("Determinism check (debug)", GLFW.GLFW_KEY_F9, CATEGORY)
@@ -32,7 +34,7 @@ public final class SavestateKeys {
 
 	public static KeyBinding[] all() {
 		return DETCHECK != null
-			? new KeyBinding[] { SAVE, LOAD, NEXT_SLOT, PREV_SLOT, DETCHECK }
-			: new KeyBinding[] { SAVE, LOAD, NEXT_SLOT, PREV_SLOT };
+			? new KeyBinding[] { SAVE, LOAD, NEXT_SLOT, PREV_SLOT, UNDO, DETCHECK }
+			: new KeyBinding[] { SAVE, LOAD, NEXT_SLOT, PREV_SLOT, UNDO };
 	}
 }
