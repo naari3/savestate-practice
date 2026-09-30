@@ -320,16 +320,15 @@ public final class MemorySnapshot {
 		timer.mark("teleport");
 
 		int[] chunkStats = new int[3];
-		int[] outsideStats = new int[3];
+		int syncLoaded = 0;
+		int appliedInPlace = 0;
+		int rewrittenOnDisk = 0;
 		for (ServerWorld world : server.getWorlds()) {
 			WorldSnap ws = this.worlds.get(world.getRegistryKey());
 			// チャンクを先に戻す。エンティティは戻したチャンクに入れる
 			if (ws != null) {
 				WorldChunksSnapshot.Prepared pc = prepared.chunks.get(world.getRegistryKey());
-				int[] o = ws.chunks.restoreOutside(world, pc);
-				for (int k = 0; k < 3; k++) {
-					outsideStats[k] += o[k];
-				}
+				syncLoaded += ws.chunks.restoreOutside(world, pc);
 				timer.mark(world.getRegistryKey().getValue().getPath() + " outside");
 				int[] s = ws.chunks.restore(world, pc);
 				for (int k = 0; k < 3; k++) {
@@ -427,8 +426,8 @@ public final class MemorySnapshot {
 			}
 			List<CompoundTag> leftover = new ArrayList<>();
 			int[] rw = ws.chunks.rewriteJournalChunks(world, leftover);
-			outsideStats[1] += rw[1];
-			outsideStats[2] += rw[0];
+			rewrittenOnDisk += rw[0];
+			appliedInPlace += rw[1];
 			spawnFromTags(world, leftover);
 			timer.mark(world.getRegistryKey().getValue().getPath() + " rewrite");
 			SavestateMod.LOGGER.info("[memory] {}: loaded chunk set converged after {} iterations in {} ms: {} loaded, {} missing, {} extra",
@@ -467,7 +466,7 @@ public final class MemorySnapshot {
 		SavestateDebug.log("apply timing: {}", timer);
 		long ms = (System.nanoTime() - start) / 1_000_000L;
 		SavestateMod.LOGGER.info("[memory] restored {} entities, {} chunks ({} missing, {} changed blocks), outside: {} sync-loaded, {} re-applied in place, {} rewritten on disk, in {} ms (apply only)",
-			restored, chunkStats[0], chunkStats[1], chunkStats[2], outsideStats[0], outsideStats[1], outsideStats[2], ms);
+			restored, chunkStats[0], chunkStats[1], chunkStats[2], syncLoaded, appliedInPlace, rewrittenOnDisk, ms);
 		if (chunkStats[1] > 0) {
 			SavestateMod.LOGGER.warn("[memory] {} chunks from the snapshot are not loaded now and were not restored", chunkStats[1]);
 		}

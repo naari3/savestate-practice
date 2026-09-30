@@ -409,9 +409,9 @@ final class WorldChunksSnapshot {
 	 * {@link #restore} の前に呼ぶ。取得時に読み込まれていて今は読み込まれていないチャンクを同期で読み込み
 	 * ({@link #restore} で戻せるように)、POI をメモリとディスクの両方で戻す。
 	 * 取得後に読み込まれたチャンクはここでは扱わず、{@link #rewriteJournalChunks} で戻す。
-	 * 戻り値は {同期で読み込んだチャンク数, 0, 0}。
+	 * 同期で読み込んだチャンク数を返す。
 	 */
-	int[] restoreOutside(ServerWorld world, Prepared prepared) {
+	int restoreOutside(ServerWorld world, Prepared prepared) {
 		ServerChunkManager chunkManager = world.getChunkManager();
 		// 途中まで進んでいる「読み込みを外す処理」を先に終わらせ、各チャンクを「読み込まれている」か「外れて保存済み」のどちらかにする。
 		// 外す途中のチャンクも getChunk(..., false) では取れてしまい、そこへ記録の NBT やエンティティを入れると、
@@ -430,7 +430,7 @@ final class WorldChunksSnapshot {
 		// どのチャンクにも属さないエンティティが残った。集合をそろえる段階で外れるのを待ってから書き戻す
 
 		this.restorePoi(world, prepared.poi);
-		return new int[] { syncLoaded, 0, 0 };
+		return syncLoaded;
 	}
 
 	/**
