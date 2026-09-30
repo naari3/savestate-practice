@@ -605,3 +605,14 @@
 
 ### 仮説 (未確認)
 - 取得直後の復元 (run 0) と、遠くへ移動した後の復元 (run 1・2) で、tick 1 に tickChunk の対象になるチャンク (プレイヤーから 8 チャンク以内の判定、ticking の集合など) が違い、ワールドの乱数の消費回数が変わっている可能性がある。スポーンチャンクとプレイヤー周りが分かれていることが条件になっていると思われる
+
+### 追記: 原因と対策 (同日)
+- ソース (ServerChunkManager.tickChunks): 毎 tick、`ThreadedAnvilChunkStorage.entryIterator()` (ChunkHolder の一覧。`currentChunkHolders` (挿入順を保つ Long2ObjectLinkedOpenHashMap) の複製) をリストにしてシャッフルし、その順に処理する。entity ticking でプレイヤーから 8 チャンク以内のチャンクだけが `tickChunk` (ワールドの乱数を引く) の対象
+- 仮説: シャッフルの乱数 (SHUFFLE) は戻しているが、元のリストの並び (ChunkHolder が作られた順) は戻していない。遠くへ移動するとプレイヤー周りの ChunkHolder が外れ、復元で作り直されて後ろに付くので、並びが変わる
+- 検査に `world <w> chunkHolders` (件数と並びのハッシュ) を足した。ho1.log (far、40 tick × 2): 件数は 3590 で同じ、並びのハッシュだけが tick 0 で違い、tick 1 からワールドの乱数がずれた → 仮説と合う
+- 以前の検査で出なかったのは、プレイヤーがスポーン付近にいて、プレイヤー周りの ChunkHolder がスポーンチャンクとして残り、作り直されなかったためと思われる
+- 対策: 取得時に `currentChunkHolders` の並びを記録し、読み込み済みの集合をそろえた後に同じ並びに並べ替える (`getAndMoveToLast`)。取得時になかったものは後ろに回し、その数を警告する。tick で使う複製 (`chunkHolders`) も作り直す
+- ho2.log (far、200 tick × 3): 全項目一致。取得時になかった ChunkHolder は 0
+- 回帰確認: ho_dim.log (dim)、ho_end.log (start=end、end) は 200 tick × 3 で全項目一致
+- ho_blk.log (block、200 tick × 3): run 1・2 が run 0 に対して、x=-394 付近のアイテム 1 個の位置・速度だけ tick 87・86 からずれた (回ごとにずれ始める tick が違う)。block では同期読み込みは 0 で、今回の並べ替えが効く状況ではない。opt_with.log でずれたのも同じ場所 (-395, 72, 148) のアイテムだった。別の問題として未解決。回ごとに tick が違うので、非同期の処理のタイミングが関係している可能性がある (未確認)
+- 注意: far の後の復元は、同期読み込みが 619 チャンクになり 2.7〜3.0 秒かかった (以前の far は 96 チャンクで 0.55〜1.0 秒)

@@ -1,6 +1,9 @@
 package net.naari3.savestate.mixin.accessor;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
+import it.unimi.dsi.fastutil.longs.LongList;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
 import java.util.Queue;
 import java.util.function.BooleanSupplier;
@@ -37,6 +40,44 @@ public abstract class ThreadedAnvilChunkStorageInvoker implements ThreadedAnvilC
 	@Shadow
 	@Final
 	private Queue<Runnable> field_19343;
+
+	@Shadow
+	@Final
+	private Long2ObjectLinkedOpenHashMap<ChunkHolder> currentChunkHolders;
+
+	@Shadow
+	private volatile Long2ObjectLinkedOpenHashMap<ChunkHolder> chunkHolders;
+
+	@Shadow
+	private boolean chunkHolderListDirty;
+
+	@Override
+	public long[] savestate$holderOrder() {
+		return this.currentChunkHolders.keySet().toLongArray();
+	}
+
+	@Override
+	public int savestate$reorderHolders(long[] order) {
+		LongSet inOrder = new LongOpenHashSet(order);
+		LongList extras = new LongArrayList();
+		for (long k : this.currentChunkHolders.keySet()) {
+			if (!inOrder.contains(k)) {
+				extras.add(k);
+			}
+		}
+		for (long k : order) {
+			if (this.currentChunkHolders.containsKey(k)) {
+				this.currentChunkHolders.getAndMoveToLast(k);
+			}
+		}
+		for (long k : extras) {
+			this.currentChunkHolders.getAndMoveToLast(k);
+		}
+		// updateHolderMap と同じく、tick で使われる複製を作り直す
+		this.chunkHolders = this.currentChunkHolders.clone();
+		this.chunkHolderListDirty = false;
+		return extras.size();
+	}
 
 	@Override
 	public boolean savestate$unloadPending() {

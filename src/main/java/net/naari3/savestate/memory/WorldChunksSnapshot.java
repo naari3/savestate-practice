@@ -74,6 +74,7 @@ final class WorldChunksSnapshot {
 	private final List<ScheduledTick<Fluid>> fluidTicks;
 	private final List<BlockEvent> blockEvents;
 	private Set<Long> tickingKeys;
+	private long[] holderOrder;
 	/** セクションごと。複製済み。 */
 	private Map<Long, Optional<?>> poi;
 	/** 取得時にまだディスクへ保存されていなかった POI セクション (保存される順)。 */
@@ -115,6 +116,7 @@ final class WorldChunksSnapshot {
 		snap.chunkKeys.addAll(keys);
 		snap.inhabitedTimes.addAll(inhabited);
 		snap.tickingKeys = ticking;
+		snap.holderOrder = ((ThreadedAnvilChunkStorageAccess) world.getChunkManager().threadedAnvilChunkStorage).savestate$holderOrder();
 
 		SerializingRegionBasedStorageAccessor poiAcc = poiAccessor(world);
 		snap.poi = new DeepCloner(chunkPolicy).copy(new LinkedHashMap<Long, Optional<?>>(poiAcc.savestate$getLoadedElements()));
@@ -222,6 +224,12 @@ final class WorldChunksSnapshot {
 			chunkManager.removeTicket(RESTORE_TICKET, pos, 0, pos);
 		}
 		((ServerChunkManagerInvoker) chunkManager).savestate$updateTickets();
+		// tickChunks は ChunkHolder の並びのリストをシャッフルして処理する。外れて作り直された ChunkHolder は後ろに付くので、
+		// 並びが取得時と違うと、同じ乱数でシャッフルしても処理の順 (= ワールドの乱数を引く順) が変わる
+		int extraHolders = tacs.savestate$reorderHolders(this.holderOrder);
+		if (extraHolders != 0) {
+			SavestateMod.LOGGER.warn("[memory] {}: {} chunk holders were not present at capture", world.getRegistryKey().getValue(), extraHolders);
+		}
 		if (SavestateDebug.ENABLED && (diff[1] != 0 || diff[2] != 0)) {
 			this.logTicketSamples(world, tacs, wanted);
 		}

@@ -155,7 +155,12 @@ public final class DetCheck {
 		int loaded = 0;
 		int ticking = 0;
 		long all = 17;
+		int holders = 0;
+		long holderOrder = 17;
 		for (net.minecraft.server.world.ChunkHolder holder : ((ThreadedAnvilChunkStorageAccess) world.getChunkManager().threadedAnvilChunkStorage).savestate$chunkHolders()) {
+			// tickChunks はこの並びのリストをシャッフルして処理するので、並びが違うと乱数を引くチャンクの順が変わる
+			holders++;
+			holderOrder = holderOrder * 31 + holder.getPos().toLong();
 			com.mojang.datafixers.util.Either<net.minecraft.world.chunk.WorldChunk, net.minecraft.server.world.ChunkHolder.Unloaded> full = holder.getBorderFuture().getNow(null);
 			net.minecraft.world.chunk.WorldChunk chunk = full == null ? null : full.left().orElse(null);
 			if (chunk == null) {
@@ -187,6 +192,7 @@ public final class DetCheck {
 			m.put("chunk " + w + " " + chunk.getPos().x + "," + chunk.getPos().z + " blocks", Long.toHexString(h));
 			all = all * 31 + h;
 		}
+		m.put("world " + w + " chunkHolders", holders + " " + Long.toHexString(holderOrder));
 		m.put("world " + w + " loadedChunks", Integer.toString(loaded));
 		m.put("world " + w + " tickingChunks", Integer.toString(ticking));
 		m.put("world " + w + " scheduledBlockTicks", Integer.toString(world.getBlockTickScheduler().getTicks()));
