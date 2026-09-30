@@ -16,7 +16,7 @@ public interface ThreadedAnvilChunkStorageAccess {
 	/** 読み込みを外す処理が残っているか (外す予定、外している途中、外す処理のタスク)。 */
 	boolean savestate$unloadPending();
 
-	/** ChunkHolder の並び (currentChunkHolders の挿入順)。tickChunks はこの並びのリストをシャッフルして処理する。 */
+	/** currentChunkHolders の挿入順。 */
 	long[] savestate$holderOrder();
 
 	/** ChunkHolder を order の並びにする。order にないものは後ろに回す。その数を返す。 */

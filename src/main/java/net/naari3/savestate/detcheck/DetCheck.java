@@ -167,7 +167,7 @@ public final class DetCheck {
 		int holders = 0;
 		long holderOrder = 17;
 		for (net.minecraft.server.world.ChunkHolder holder : ((ThreadedAnvilChunkStorageAccess) world.getChunkManager().threadedAnvilChunkStorage).savestate$chunkHolders()) {
-			// tickChunks はこの並びのリストをシャッフルして処理するので、並びが違うと乱数を引くチャンクの順が変わる
+			// 並びは tickChunks の処理順に効く (WorldChunksSnapshot.convergeLoadedSet を参照)
 			holders++;
 			holderOrder = holderOrder * 31 + holder.getPos().toLong();
 			com.mojang.datafixers.util.Either<net.minecraft.world.chunk.WorldChunk, net.minecraft.server.world.ChunkHolder.Unloaded> full = holder.getBorderFuture().getNow(null);
