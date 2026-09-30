@@ -29,6 +29,7 @@
 		"rng.DispenserBlockEntityRngMixin",
 		"rng.EnchantingTableBlockEntityRngMixin",
 		"rng.EnchantmentScreenHandlerRngMixin",
+		"rng.EntityIdMixin",
 		"rng.EntityNavigationClockMixin",
 		"rng.EntityRngMixin",
 		"rng.ExplosionRngMixin",

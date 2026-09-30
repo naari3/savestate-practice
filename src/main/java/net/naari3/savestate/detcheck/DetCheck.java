@@ -144,6 +144,7 @@ public final class DetCheck {
 			for (Entity e : world.iterateEntities()) {
 				count++;
 				String k = "entity " + w + " " + EntityType.getId(e.getType()).getPath() + " " + e.getUuidAsString().substring(0, 8);
+				m.put(k + " id", Integer.toString(e.getEntityId()));
 				m.put(k + " pos", e.getX() + "," + e.getY() + "," + e.getZ());
 				Vec3d v = e.getVelocity();
 				m.put(k + " vel", v.x + "," + v.y + "," + v.z);
