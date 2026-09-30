@@ -28,7 +28,7 @@ public final class DetCheck {
 	private static volatile boolean armed;
 	private static int runIndex = -1;
 	/** 調査用: この UUID (先頭 8 文字) のエンティティを tick 0〜2 でファイルに書き出す。 */
-	private static final String DUMP_ENTITY = System.getProperty("mcsr-savestate.detcheck.dump");
+	private static final String DUMP_ENTITY = System.getProperty("savestate-practice.detcheck.dump");
 	private static volatile int ticksToRecord;
 	private static volatile List<Map<String, String>> recording;
 	private static volatile List<Map<String, String>> finished;

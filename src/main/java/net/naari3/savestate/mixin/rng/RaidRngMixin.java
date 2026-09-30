@@ -17,7 +17,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 /** Raid.random を StatefulRandom にし、その状態を raids.dat の各 Raid に保存する。 */
 @Mixin(Raid.class)
 public class RaidRngMixin {
-	private static final String KEY = "mcsr-savestate:Random";
+	private static final String KEY = "savestate-practice:Random";
+	/** 改名前 (mcsr-savestate) に保存されたワールドのキー。 */
+	private static final String LEGACY_KEY = "mcsr-savestate:Random";
 
 	@Shadow
 	@Final
@@ -39,6 +41,8 @@ public class RaidRngMixin {
 	private void savestate$readRandom(ServerWorld world, CompoundTag tag, CallbackInfo ci) {
 		if (this.random instanceof StatefulRandom && tag.contains(KEY, 10)) {
 			((StatefulRandom) this.random).fromTag(tag.getCompound(KEY));
+		} else if (this.random instanceof StatefulRandom && tag.contains(LEGACY_KEY, 10)) {
+			((StatefulRandom) this.random).fromTag(tag.getCompound(LEGACY_KEY));
 		}
 	}
 }

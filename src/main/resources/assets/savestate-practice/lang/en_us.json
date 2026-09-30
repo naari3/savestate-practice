@@ -1,0 +1,16 @@
+{
+	"key.categories.savestate-practice": "Savestate Practice",
+	"key.savestate-practice.save": "Save state",
+	"key.savestate-practice.load": "Load state",
+	"key.savestate-practice.next_slot": "Next slot",
+	"key.savestate-practice.prev_slot": "Previous slot",
+	"key.savestate-practice.undo": "Undo last load",
+	"key.savestate-practice.detcheck": "Determinism check (debug)",
+	"speedrunapi.config.savestate-practice.option.mode": "Mode",
+	"speedrunapi.config.savestate-practice.option.mode.description": "Memory: keeps snapshots in memory and restores without reloading the world (keeps AI state, scheduled ticks, POI, RNG). Disk: copies the world folder and reopens it.",
+	"speedrunapi.config.savestate-practice.option.mode.value.MEMORY": "Memory",
+	"speedrunapi.config.savestate-practice.option.mode.value.DISK": "Disk",
+	"speedrunapi.config.savestate-practice.option.slotCount": "Slots",
+	"speedrunapi.config.savestate-practice.option.slotCount.description": "Number of slots to cycle through with Next / Previous slot.",
+	"speedrunapi.config.savestate-practice.category.keys": "Key Bindings"
+}

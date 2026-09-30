@@ -140,7 +140,7 @@ final class WorldChunksSnapshot {
 	}
 
 	/** 復元中だけ取得時のチャンクを保持するチケット (期限なし)。 */
-	private static final ChunkTicketType<ChunkPos> RESTORE_TICKET = ChunkTicketType.create("mcsr_savestate_restore", Comparator.comparingLong(ChunkPos::toLong));
+	private static final ChunkTicketType<ChunkPos> RESTORE_TICKET = ChunkTicketType.create("savestate_practice_restore", Comparator.comparingLong(ChunkPos::toLong));
 	/** 1 回の待ちの上限。メインスレッドにタスクが届けば (ThreadExecutor.send が unpark する)、それより早く起きる。 */
 	private static final long WAIT_STEP_NANOS = 1_000_000L;
 	private static final long MAX_WAIT_NANOS = 10_000_000_000L;
@@ -213,7 +213,7 @@ final class WorldChunksSnapshot {
 			if (now - begin >= MAX_WAIT_NANOS) {
 				break;
 			}
-			LockSupport.parkNanos("mcsr-savestate: waiting for chunk tasks", WAIT_STEP_NANOS);
+			LockSupport.parkNanos("savestate-practice: waiting for chunk tasks", WAIT_STEP_NANOS);
 			if (Thread.interrupted()) {
 				Thread.currentThread().interrupt();
 				break;
@@ -271,7 +271,7 @@ final class WorldChunksSnapshot {
 			if (!tacs.savestate$unloadPending() || System.nanoTime() - begin >= MAX_WAIT_NANOS) {
 				return;
 			}
-			LockSupport.parkNanos("mcsr-savestate: waiting for chunk tasks", WAIT_STEP_NANOS);
+			LockSupport.parkNanos("savestate-practice: waiting for chunk tasks", WAIT_STEP_NANOS);
 			if (Thread.interrupted()) {
 				Thread.currentThread().interrupt();
 				return;

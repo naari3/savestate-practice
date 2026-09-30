@@ -20,7 +20,7 @@ import org.jetbrains.annotations.Nullable;
 import org.lwjgl.glfw.GLFW;
 
 /**
- * SpeedrunAPI の設定 (config/mcsr/mcsr-savestate.json、設定画面は Options の SpeedrunAPI の MOD 一覧から開く)。
+ * SpeedrunAPI の設定 (config/mcsr/savestate-practice.json、設定画面は Options の SpeedrunAPI の MOD 一覧から開く)。
  * fabric.mod.json の custom.speedrunapi.config で登録し、SpeedrunAPI がインスタンスを作る。
  */
 @SuppressWarnings("FieldMayBeFinal")
@@ -40,19 +40,19 @@ public class SavestateConfig implements SpeedrunConfig {
 	// キー割り当て。設定画面に並べるための項目で、値はここには持たない (vanilla の操作設定と同じく options.txt に保存する)。
 	// 設定ファイルには null として書かれるが、読み込みでは無視する
 	@Config.Category("keys")
-	@Config.Name("key.mcsr-savestate.save")
+	@Config.Name("key.savestate-practice.save")
 	public InputUtil.Key saveKey;
 	@Config.Category("keys")
-	@Config.Name("key.mcsr-savestate.load")
+	@Config.Name("key.savestate-practice.load")
 	public InputUtil.Key loadKey;
 	@Config.Category("keys")
-	@Config.Name("key.mcsr-savestate.next_slot")
+	@Config.Name("key.savestate-practice.next_slot")
 	public InputUtil.Key nextSlotKey;
 	@Config.Category("keys")
-	@Config.Name("key.mcsr-savestate.prev_slot")
+	@Config.Name("key.savestate-practice.prev_slot")
 	public InputUtil.Key prevSlotKey;
 	@Config.Category("keys")
-	@Config.Name("key.mcsr-savestate.undo")
+	@Config.Name("key.savestate-practice.undo")
 	public InputUtil.Key undoKey;
 
 	/** 割り当て待ちのキー (ボタンを押してから、次のキー入力まで)。 */
@@ -68,9 +68,9 @@ public class SavestateConfig implements SpeedrunConfig {
 		return instance != null ? instance : new SavestateConfig();
 	}
 
-	/** インメモリ方式か。-Dmcsr-savestate.mode=memory|disk があればそちらを優先する (検査用)。 */
+	/** インメモリ方式か。-Dsavestate-practice.mode=memory|disk があればそちらを優先する (検査用)。 */
 	public static boolean memoryMode() {
-		String override = System.getProperty("mcsr-savestate.mode");
+		String override = System.getProperty("savestate-practice.mode");
 		if (override != null) {
 			return !"disk".equals(override);
 		}

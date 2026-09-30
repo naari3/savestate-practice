@@ -19,7 +19,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 /** Entity.random を StatefulRandom にし、その状態をエンティティの NBT に保存する。 */
 @Mixin(Entity.class)
 public abstract class EntityRngMixin implements EntityRandomAccess {
-	private static final String KEY = "mcsr-savestate:Random";
+	private static final String KEY = "savestate-practice:Random";
+	/** 改名前 (mcsr-savestate) に保存されたワールドのキー。 */
+	private static final String LEGACY_KEY = "mcsr-savestate:Random";
 
 	@Override
 	public Random savestate$random() {
@@ -46,6 +48,8 @@ public abstract class EntityRngMixin implements EntityRandomAccess {
 	private void savestate$readRandom(CompoundTag tag, CallbackInfo ci) {
 		if (this.random instanceof StatefulRandom && tag.contains(KEY, 10)) {
 			((StatefulRandom) this.random).fromTag(tag.getCompound(KEY));
+		} else if (this.random instanceof StatefulRandom && tag.contains(LEGACY_KEY, 10)) {
+			((StatefulRandom) this.random).fromTag(tag.getCompound(LEGACY_KEY));
 			if (SavestateDebug.ENABLED && (Object) this instanceof VillagerEntity) {
 				Entity self = (Entity) (Object) this;
 				SavestateDebug.log("fromTag villager {} restored rand={} thread={}",

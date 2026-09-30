@@ -28,7 +28,7 @@ import net.naari3.savestate.detcheck.DetCheck;
 /**
  * 決定論の検査 (クライアント側の手順)。
  *
- * 自動モード (-Dmcsr-savestate.detcheck.world=<ワールドのフォルダ名>):
+ * 自動モード (-Dsavestate-practice.detcheck.world=<ワールドのフォルダ名>):
  *   タイトル画面でそのワールドを開く → 少し待つ → 検査用スロットに save → そのスロットから runs 回 load し、
  *   各回 ticks tick を記録 → 比較してレポートを書く → (exit=true なら) ゲームを終了する。
  * 手動モード (debug 時のみのキー): 今のスロットから同じ手順で load と記録だけを行う。
@@ -36,10 +36,10 @@ import net.naari3.savestate.detcheck.DetCheck;
  * 検査中は操作しないこと (プレイヤーの入力は揃えられない)。
  */
 public final class DetCheckDriver {
-	private static final String AUTO_WORLD = System.getProperty("mcsr-savestate.detcheck.world");
-	private static final int TICKS = Integer.getInteger("mcsr-savestate.detcheck.ticks", 100);
-	private static final int RUNS = Integer.getInteger("mcsr-savestate.detcheck.runs", 3);
-	private static final boolean EXIT = Boolean.getBoolean("mcsr-savestate.detcheck.exit");
+	private static final String AUTO_WORLD = System.getProperty("savestate-practice.detcheck.world");
+	private static final int TICKS = Integer.getInteger("savestate-practice.detcheck.ticks", 100);
+	private static final int RUNS = Integer.getInteger("savestate-practice.detcheck.runs", 3);
+	private static final boolean EXIT = Boolean.getBoolean("savestate-practice.detcheck.exit");
 	private static final int AUTO_SLOT = SavestateConfig.MAX_SLOTS;
 	private static final int SETTLE_TICKS = 40;
 	/**
@@ -48,9 +48,9 @@ public final class DetCheckDriver {
 	 * dim: 取得時のチャンクを変更 → 別のディメンションへ移動 (オーバーワールド ⇔ ネザー。エンドからはオーバーワールド) → そこでブロックを変更
 	 * end: ドラゴンに大ダメージを与え、エンドクリスタルを壊す → オーバーワールドへ移動 → そこでブロックを変更
 	 */
-	private static final String DISTURB = System.getProperty("mcsr-savestate.detcheck.disturb");
+	private static final String DISTURB = System.getProperty("savestate-practice.detcheck.disturb");
 	/** 取得する場所 (overworld / nether / end)。null ならワールドを開いた場所のまま。 */
-	private static final String START = System.getProperty("mcsr-savestate.detcheck.start");
+	private static final String START = System.getProperty("savestate-practice.detcheck.start");
 	private static boolean movedToStart;
 	/** 飛ばしてから元のチャンクの読み込みが外れて保存されるまで待つ tick 数。 */
 	private static final int DISTURB_FAR_TICKS = 400;
@@ -159,7 +159,7 @@ public final class DetCheckDriver {
 	}
 
 	/**
-	 * かき乱し (-Dmcsr-savestate.detcheck.disturb=true): 2 回目以降の復元の前に、取得時に読み込まれていたチャンクを変更し、
+	 * かき乱し (-Dsavestate-practice.detcheck.disturb=true): 2 回目以降の復元の前に、取得時に読み込まれていたチャンクを変更し、
 	 * プレイヤーを遠くへ飛ばして元のチャンクの読み込みを外させ (ディスクに書かせ)、飛んだ先の新しいチャンクも変更する。
 	 * 読み込み済みチャンク以外の復元 (ChunkJournal) が正しければ、それでも復元後の記録は 1 回目と一致するはず。
 	 */

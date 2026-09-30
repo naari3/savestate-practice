@@ -13,44 +13,44 @@ loom {
 	runs {
 		client {
 			// 起動時に全 Mixin を適用して失敗を洗い出す (SavestateMod 参照)
-			vmArg "-Dmcsr-savestate.audit=true"
+			vmArg "-Dsavestate-practice.audit=true"
 			// 調査用ログ (SavestateDebug)
-			vmArg "-Dmcsr-savestate.debug=true"
+			vmArg "-Dsavestate-practice.debug=true"
 			// 決定論の自動検査: ./gradlew runClient -PdetcheckWorld=<フォルダ名> [-PdetcheckTicks=100] [-PdetcheckRuns=3]
 			if (project.hasProperty("detcheckWorld")) {
-				vmArg "-Dmcsr-savestate.detcheck.world=${project.property('detcheckWorld')}"
-				vmArg "-Dmcsr-savestate.detcheck.exit=true"
+				vmArg "-Dsavestate-practice.detcheck.world=${project.property('detcheckWorld')}"
+				vmArg "-Dsavestate-practice.detcheck.exit=true"
 			}
 			// 方式の切り替え: -PsavestateMode=disk (既定は memory)
 			if (project.hasProperty("savestateMode")) {
-				vmArg "-Dmcsr-savestate.mode=${project.property('savestateMode')}"
+				vmArg "-Dsavestate-practice.mode=${project.property('savestateMode')}"
 			}
 			// かき乱し: -PdetcheckDisturb=far|dim|end|block
 			if (project.hasProperty("detcheckDisturb")) {
-				vmArg "-Dmcsr-savestate.detcheck.disturb=${project.property('detcheckDisturb') ?: 'far'}"
+				vmArg "-Dsavestate-practice.detcheck.disturb=${project.property('detcheckDisturb') ?: 'far'}"
 			}
 			// 取得する場所: -PdetcheckStart=overworld|nether|end
 			if (project.hasProperty("detcheckStart")) {
-				vmArg "-Dmcsr-savestate.detcheck.start=${project.property('detcheckStart')}"
+				vmArg "-Dsavestate-practice.detcheck.start=${project.property('detcheckStart')}"
 			}
 			// 故障の注入: -PfailApply=N (N 回目の復元の適用段階で例外を投げる)
 			if (project.hasProperty("failApply")) {
-				vmArg "-Dmcsr-savestate.debug.failApply=${project.property('failApply')}"
+				vmArg "-Dsavestate-practice.debug.failApply=${project.property('failApply')}"
 			}
 			if (project.hasProperty("detcheckDump")) {
-				vmArg "-Dmcsr-savestate.detcheck.dump=${project.property('detcheckDump')}"
+				vmArg "-Dsavestate-practice.detcheck.dump=${project.property('detcheckDump')}"
 			}
 			if (project.hasProperty("detcheckTicks")) {
-				vmArg "-Dmcsr-savestate.detcheck.ticks=${project.property('detcheckTicks')}"
+				vmArg "-Dsavestate-practice.detcheck.ticks=${project.property('detcheckTicks')}"
 			}
 			if (project.hasProperty("detcheckRuns")) {
-				vmArg "-Dmcsr-savestate.detcheck.runs=${project.property('detcheckRuns')}"
+				vmArg "-Dsavestate-practice.detcheck.runs=${project.property('detcheckRuns')}"
 			}
 		}
 	}
 }
 
-// Fabric API is intentionally not used (MCSR convention). Only Minecraft + Fabric Loader.
+// Fabric API は使わない。設定・キー登録・lang の読み込みは SpeedrunAPI を使う
 repositories {
 	maven { url = "https://jitpack.io" }
 }

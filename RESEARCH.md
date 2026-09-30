@@ -564,3 +564,17 @@
 - vel5far.log (修正あり、新しいコピー detcheck_far5): tick 0 から overworld の `scheduledFluidTicks` だけ 59 → 67。100 tick 中 6〜7 tick だけ違い、ブロックなどは一致
 - vel6farctl.log (修正なし、detcheck_far6): まったく同じずれ (59 → 67) → 今回の修正とは無関係
 - 以前の far の検査は、コピーではない detcheck ワールドで一致していた。新しいコピーで far をやると再現する
+
+## 2026-09-30 名前を savestate-practice に変える (ユーザーの指示)
+
+### 変更
+- mod id を mcsr-savestate → savestate-practice、表示名を「Savestate Practice」に変えた。MCSR コミュニティの公式の MOD と誤解されないようにするため
+- あわせて変えたもの: システムプロパティ (`-Dsavestate-practice.*`)、翻訳キー、assets の名前空間、Mixin の設定ファイル、チケットの種類名、jar 名
+- 改名前に保存されたデータは読めるようにした: エンティティ・襲撃の NBT のキー `mcsr-savestate:Random` と、ディスク方式のスロットの `mcsr-savestate-rng.dat`
+- 引き継がれないもの: キーの割り当て (options.txt のキー名が変わる)、設定ファイル (config/mcsr/savestate-practice.json に変わる)
+- リポジトリのフォルダ名 (mcsr-savestate) は変えていない
+
+### 観察
+- rename_memory.log (インメモリ方式、block、100 tick × 2): 全項目一致
+- rename_disk.log (ディスク方式、block): tick 1 から 74 項目ずれた (チャンクの読み込み状況とエンティティ)
+- ctl_disk.log (改名前のコミット c8bc21b、ディスク方式、同じ条件): tick 1 から同じ種類のずれ (同じチャンク -14,13 の読み込みの差) → 改名とは無関係。ディスク方式は、チャンクを比べる検査を入れてから確認していなかった。ワールドを開き直したときの非同期のチャンク読み込みの差と思われる (未調査)

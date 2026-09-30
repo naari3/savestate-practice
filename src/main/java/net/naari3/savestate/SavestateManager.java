@@ -32,7 +32,9 @@ import net.naari3.savestate.rng.RngState;
  * load: ワールドを閉じ (サーバー停止まで待つ)、ワールドフォルダをスロットの内容と入れ替えて開き直す。
  */
 public final class SavestateManager {
-	private static final String RNG_FILE = "mcsr-savestate-rng.dat";
+	private static final String RNG_FILE = "savestate-practice-rng.dat";
+	/** 改名前 (mcsr-savestate) に保存したスロットの RNG ファイル。 */
+	private static final String LEGACY_RNG_FILE = "mcsr-savestate-rng.dat";
 	/** 方式 (インメモリ / ディスク) は SavestateConfig.memoryMode() で決まる。スロットは 1 から MAX_SLOTS まで。 */
 	private static final MemorySnapshot[] memorySlots = new MemorySnapshot[SavestateConfig.MAX_SLOTS + 1];
 	/** memorySlots を取ったサーバー。別のワールドを開いたら (サーバーが変わったら) 使わない。 */
@@ -316,6 +318,9 @@ public final class SavestateManager {
 		try {
 			replaceWorld(worldDir, src);
 			Path rngFile = src.resolve(RNG_FILE);
+			if (!Files.isRegularFile(rngFile)) {
+				rngFile = src.resolve(LEGACY_RNG_FILE);
+			}
 			if (Files.isRegularFile(rngFile)) {
 				try (InputStream in = Files.newInputStream(rngFile)) {
 					RngState.setPending(NbtIo.readCompressed(in));

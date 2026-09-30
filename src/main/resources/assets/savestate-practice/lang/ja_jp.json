@@ -1,0 +1,16 @@
+{
+	"key.categories.savestate-practice": "Savestate Practice",
+	"key.savestate-practice.save": "ステートを保存",
+	"key.savestate-practice.load": "ステートを読み込み",
+	"key.savestate-practice.next_slot": "次のスロット",
+	"key.savestate-practice.prev_slot": "前のスロット",
+	"key.savestate-practice.undo": "直前の読み込みを取り消す",
+	"key.savestate-practice.detcheck": "決定論の検査 (デバッグ)",
+	"speedrunapi.config.savestate-practice.option.mode": "方式",
+	"speedrunapi.config.savestate-practice.option.mode.description": "メモリ: スナップショットをメモリに持ち、ワールドを開き直さずに戻す (AI の状態、予約された tick、POI、乱数も戻す)。ディスク: ワールドのフォルダを複製し、開き直して戻す。",
+	"speedrunapi.config.savestate-practice.option.mode.value.MEMORY": "メモリ",
+	"speedrunapi.config.savestate-practice.option.mode.value.DISK": "ディスク",
+	"speedrunapi.config.savestate-practice.option.slotCount": "スロット数",
+	"speedrunapi.config.savestate-practice.option.slotCount.description": "次のスロット / 前のスロットで切り替えるスロットの数。",
+	"speedrunapi.config.savestate-practice.category.keys": "キー設定"
+}
