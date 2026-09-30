@@ -11,6 +11,7 @@ public class SavestateMod implements ClientModInitializer {
 
 	@Override
 	public void onInitializeClient() {
+		SavestateKeys.register();
 		LOGGER.info("MCSR Savestate initialized");
 		// 開発時の確認用: 対象クラスが読み込まれるのを待たず、全 Mixin をこの時点で適用して失敗を洗い出す
 		if (Boolean.getBoolean("mcsr-savestate.audit")) {

@@ -48,9 +48,7 @@
 		"rng.WorldRngMixin"
 	],
 	"client": [
-		"GameOptionsMixin",
-		"MinecraftClientMixin",
-		"accessor.KeyBindingAccessor"
+		"MinecraftClientMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

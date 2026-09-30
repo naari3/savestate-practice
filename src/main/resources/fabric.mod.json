@@ -3,7 +3,7 @@
 	"id": "mcsr-savestate",
 	"version": "${version}",
 	"name": "MCSR Savestate",
-	"description": "Savestate / loadstate for Minecraft 1.16.1 speedrun practice. No Fabric API.",
+	"description": "Savestate / loadstate for Minecraft 1.16.1 speedrun practice. Uses SpeedrunAPI instead of Fabric API.",
 	"authors": [
 		"naari3"
 	],
@@ -14,11 +14,17 @@
 			"net.naari3.savestate.SavestateMod"
 		]
 	},
+	"custom": {
+		"speedrunapi": {
+			"config": "net.naari3.savestate.SavestateConfig"
+		}
+	},
 	"mixins": [
 		"mcsr-savestate.mixins.json"
 	],
 	"depends": {
 		"fabricloader": ">=0.16.0",
-		"minecraft": "1.16.1"
+		"minecraft": "1.16.1",
+		"speedrunapi": ">=2.2"
 	}
 }

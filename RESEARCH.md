@@ -501,3 +501,23 @@
 
 ### 残り
 - far の後の残り時間は、外れかけていたチャンクが FULL に戻る非同期処理 (約 250〜450 ms) と、throttler がプレイヤーのチケットを 1 チャンクずつ付ける待ち。後者をさらに縮めるには throttler を迂回する必要があり、上の順序の問題があるので未着手
+
+## 2026-09-30 SpeedrunAPI に依存させる (ユーザーの指示)
+
+### 経緯
+- 当初の制約は「Fabric API を使わない」。ユーザーの指示で SpeedrunAPI (contariaa/SpeedrunAPI、MCSR の MOD が使う設定 API) に依存させた。SpeedrunAPI は Fabric API のうち key-binding-api (tildejustin によるポート) を同梱し、MOD の assets (lang) を読み込む仕組みも持つ
+- バージョン: jitpack の `v2.2-1.16-1.16.1` (2026-09-30 時点の最新タグ)。`gradle.properties` の `speedrunapi_version`
+
+### 変更
+- 設定 (`SavestateConfig`、config/mcsr/mcsr-savestate.json): 方式 (memory / disk) とスロット数 (1〜9)
+  - 検査用に `-Dmcsr-savestate.mode` があればそちらを優先する
+  - 調査用のプロパティ (debug、detcheck、failApply、audit) は開発用なので、システムプロパティのまま
+  - 取り消し用スナップショットを取らない設定は出さなかった。load の途中で失敗したときのロールバックにも使っているため
+- キー: `KeyBindingHelper` で登録し、自前の `GameOptionsMixin` と `categoryOrderMap` の登録を削除した。表示名は翻訳キー (assets/mcsr-savestate/lang の en_us / ja_jp)
+  - 翻訳キーに変えたので、以前の options.txt のキー割り当て (`key_Save state` など) は引き継がれない
+
+### 確認 (sapi1〜3.log)
+- 読み込まれる MOD に speedrunapi 2.2 と fabric-key-binding-api-v1 が入り、設定ファイルが既定値で作られた。Mixin の監査でエラーなし
+- キーが `GameOptions.keysAll` に入っている。ワールドに入った後、翻訳キーが「Save state」に解決される (最初の tick はリソースの読み込み前で、未解決だった)
+- far、100 tick × 2: 全項目一致
+- 設定画面の見た目は確認していない

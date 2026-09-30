@@ -32,11 +32,9 @@ import net.naari3.savestate.rng.RngState;
  * load: ワールドを閉じ (サーバー停止まで待つ)、ワールドフォルダをスロットの内容と入れ替えて開き直す。
  */
 public final class SavestateManager {
-	public static final int SLOT_COUNT = 9;
 	private static final String RNG_FILE = "mcsr-savestate-rng.dat";
-	/** memory (既定): インメモリ方式。disk: ワールドのフォルダを複製して開き直す方式 (フェーズ 1)。 */
-	public static final boolean MEMORY_MODE = !"disk".equals(System.getProperty("mcsr-savestate.mode", "memory"));
-	private static final MemorySnapshot[] memorySlots = new MemorySnapshot[SLOT_COUNT + 1];
+	/** 方式 (インメモリ / ディスク) は SavestateConfig.memoryMode() で決まる。スロットは 1 から MAX_SLOTS まで。 */
+	private static final MemorySnapshot[] memorySlots = new MemorySnapshot[SavestateConfig.MAX_SLOTS + 1];
 	/** memorySlots を取ったサーバー。別のワールドを開いたら (サーバーが変わったら) 使わない。 */
 	private static IntegratedServer memorySlotServer;
 	/** 直前の load の取り消し用 (load する直前の状態)。 */
@@ -50,7 +48,16 @@ public final class SavestateManager {
 	private SavestateManager() {
 	}
 
+	private static boolean loggedKeys = false;
+
 	public static void onClientTick(MinecraftClient client) {
+		if (SavestateDebug.ENABLED && !loggedKeys && client.world != null) {
+			// 調査用: キーが設定画面と options.txt の対象 (keysAll) に入ったか、lang が読まれたか
+			loggedKeys = true;
+			SavestateDebug.log("keys registered in options: {}, translated name: {}",
+				java.util.Arrays.asList(client.options.keysAll).contains(SavestateKeys.SAVE),
+				net.minecraft.client.resource.language.I18n.translate(SavestateKeys.SAVE.getTranslationKey()));
+		}
 		if (pendingMessage != null && client.player != null) {
 			overlay(client, pendingMessage);
 			pendingMessage = null;
@@ -70,16 +77,17 @@ public final class SavestateManager {
 			if (inWorld) load(client);
 		}
 		while (SavestateKeys.UNDO.wasPressed()) {
-			if (inWorld && MEMORY_MODE) undoLoad(client);
+			if (inWorld && SavestateConfig.memoryMode()) undoLoad(client);
 		}
 
 		DetCheckDriver.onClientTick(client);
 	}
 
 	private static void changeSlot(MinecraftClient client, int delta) {
-		currentSlot = Math.floorMod(currentSlot - 1 + delta, SLOT_COUNT) + 1;
+		// スロット数を設定で減らした後は、範囲外のスロットから範囲内に戻す
+		currentSlot = Math.floorMod(Math.min(currentSlot, SavestateConfig.slotCount()) - 1 + delta, SavestateConfig.slotCount()) + 1;
 		IntegratedServer server = client.getServer();
-		boolean exists = MEMORY_MODE
+		boolean exists = SavestateConfig.memoryMode()
 			? memorySlotServer == server && memorySlots[currentSlot] != null
 			: server != null && Files.isDirectory(slotDir(worldDirName(server), currentSlot));
 		overlay(client, "Slot " + currentSlot + (exists ? "" : " (empty)"));
@@ -91,7 +99,7 @@ public final class SavestateManager {
 
 	/** onSuccess はクライアントスレッドで呼ばれる。 */
 	public static void saveSlot(MinecraftClient client, int slot, Runnable onSuccess) {
-		if (MEMORY_MODE) {
+		if (SavestateConfig.memoryMode()) {
 			saveMemory(client, slot, onSuccess);
 		} else {
 			saveDisk(client, slot, onSuccess);
@@ -270,7 +278,7 @@ public final class SavestateManager {
 
 	/** load を開始できたら true。 */
 	public static boolean loadSlot(MinecraftClient client, int slot) {
-		return MEMORY_MODE ? loadMemory(client, slot) : loadDisk(client, slot);
+		return SavestateConfig.memoryMode() ? loadMemory(client, slot) : loadDisk(client, slot);
 	}
 
 	private static boolean loadDisk(MinecraftClient client, int slot) {

@@ -40,7 +40,7 @@ public final class DetCheckDriver {
 	private static final int TICKS = Integer.getInteger("mcsr-savestate.detcheck.ticks", 100);
 	private static final int RUNS = Integer.getInteger("mcsr-savestate.detcheck.runs", 3);
 	private static final boolean EXIT = Boolean.getBoolean("mcsr-savestate.detcheck.exit");
-	private static final int AUTO_SLOT = SavestateManager.SLOT_COUNT;
+	private static final int AUTO_SLOT = SavestateConfig.MAX_SLOTS;
 	private static final int SETTLE_TICKS = 40;
 	/**
 	 * かき乱しの種類 (null ならかき乱さない)。

@@ -1,0 +1,15 @@
+{
+	"key.categories.mcsr-savestate": "MCSR Savestate",
+	"key.mcsr-savestate.save": "ステートを保存",
+	"key.mcsr-savestate.load": "ステートを読み込み",
+	"key.mcsr-savestate.next_slot": "次のスロット",
+	"key.mcsr-savestate.prev_slot": "前のスロット",
+	"key.mcsr-savestate.undo": "直前の読み込みを取り消す",
+	"key.mcsr-savestate.detcheck": "決定論の検査 (デバッグ)",
+	"speedrunapi.config.mcsr-savestate.option.mode": "方式",
+	"speedrunapi.config.mcsr-savestate.option.mode.description": "メモリ: スナップショットをメモリに持ち、ワールドを開き直さずに戻す (AI の状態、予約された tick、POI、乱数も戻す)。ディスク: ワールドのフォルダを複製し、開き直して戻す。",
+	"speedrunapi.config.mcsr-savestate.option.mode.value.MEMORY": "メモリ",
+	"speedrunapi.config.mcsr-savestate.option.mode.value.DISK": "ディスク",
+	"speedrunapi.config.mcsr-savestate.option.slotCount": "スロット数",
+	"speedrunapi.config.mcsr-savestate.option.slotCount.description": "次のスロット / 前のスロットで切り替えるスロットの数。"
+}
