@@ -147,6 +147,8 @@ final class WorldChunksSnapshot {
 	/** 読み込み済みのチャンク数が変わらないまま、この時間たったらあきらめる (プレイヤーのチケットやチャンクの読み込みは非同期に進むので長めにとる)。 */
 	private static final long STABLE_NANOS = 3_000_000_000L;
 	private static final long PROGRESS_LOG_NANOS = 250_000_000L;
+	/** 集合の差を数える間隔。数えるのは全 ChunkHolder を走査するので数 ms かかり、毎回数えると throttler の進みがそれで律速される。 */
+	private static final long DIFF_INTERVAL_NANOS = 20_000_000L;
 
 	/**
 	 * 読み込み済みのチャンクの集合を、取得時と同じにそろえる (ワールドは進めない)。
@@ -168,6 +170,7 @@ final class WorldChunksSnapshot {
 		int[] diff = new int[3];
 		int[] tickingDiff = new int[2];
 		boolean unloadPending = false;
+		long lastDiff = 0;
 		// そろえる間は、取得時のチャンクに期限なしのチケット (FULL レベル) を付けて、読み込みが外れないようにする。
 		// プレイヤーのチケットが非同期に届くまでの間にレベルが下がって外れると、中のエンティティが NBT から作り直され、
 		// 実行時の状態 (AI など) が失われるため
@@ -187,9 +190,16 @@ final class WorldChunksSnapshot {
 			tacs.savestate$unloadTick();
 			// executeQueuedTasks は 1 回で 1 つしか実行しないので、キューが空になるまで回す
 			// (プレイヤーのチケットの付け外しは、1 チャンクごとのタスクとしてここに積まれる)
+			int tasks = 0;
 			while (chunkManager.executeQueuedTasks()) {
+				tasks++;
 			}
 			((ServerChunkManagerInvoker) chunkManager).savestate$updateTickets();
+			long now = System.nanoTime();
+			if (iterations > 1 && tasks > 0 && now - lastDiff < DIFF_INTERVAL_NANOS) {
+				continue;
+			}
+			lastDiff = now;
 			diff = loadedDiff(tacs, wanted);
 			tickingDiff = tickingDiff(tacs, this.tickingKeys);
 			unloadPending = tacs.savestate$unloadPending();
@@ -197,7 +207,6 @@ final class WorldChunksSnapshot {
 			if (diff[1] == 0 && diff[2] == 0 && tickingDiff[0] == 0 && tickingDiff[1] == 0 && !unloadPending) {
 				break;
 			}
-			long now = System.nanoTime();
 			if (SavestateDebug.ENABLED && now - lastProgressLog >= PROGRESS_LOG_NANOS) {
 				lastProgressLog = now;
 				SavestateDebug.log("{}: converging, {} ms: loaded diff {}/{}, ticking diff {}/{}, unload pending {}, throttler {}",
@@ -212,6 +221,9 @@ final class WorldChunksSnapshot {
 			}
 			if (now - begin >= MAX_WAIT_NANOS) {
 				break;
+			}
+			if (tasks > 0) {
+				continue;
 			}
 			LockSupport.parkNanos("savestate-practice: waiting for chunk tasks", WAIT_STEP_NANOS);
 			if (Thread.interrupted()) {
@@ -408,16 +420,60 @@ final class WorldChunksSnapshot {
 		}
 	}
 
+	/**
+	 * チャンクをまとめて FULL まで読み込む。1 つずつ getChunk(..., true) で待つと直列になるので、全部にチケットを付けて
+	 * ワーカースレッドで並列に読み込ませ、そろうまでメインスレッドのタスクを回す。時間内にそろわなかったものは同期で読み込む。
+	 * チケットは外さず、{@link #convergeLoadedSet} の最後 (失敗時は {@link #releaseRestoreTickets}) で外す。
+	 * ここで外すと、そろえる処理が付け直すまでの間にチケットの反映が走ってレベルが一度下がり、読み込み直しになる。
+	 */
+	private static void loadAll(ServerWorld world, List<ChunkPos> positions) {
+		if (positions.isEmpty()) {
+			return;
+		}
+		ServerChunkManager chunkManager = world.getChunkManager();
+		for (ChunkPos pos : positions) {
+			chunkManager.addTicket(RESTORE_TICKET, pos, 0, pos);
+		}
+		List<ChunkPos> pending = new ArrayList<>(positions);
+		long begin = System.nanoTime();
+		while (!pending.isEmpty() && System.nanoTime() - begin < MAX_WAIT_NANOS) {
+			((ServerChunkManagerInvoker) chunkManager).savestate$updateTickets();
+			int tasks = 0;
+			while (chunkManager.executeQueuedTasks()) {
+				tasks++;
+			}
+			pending.removeIf(pos -> world.getChunk(pos.x, pos.z, ChunkStatus.FULL, false) != null);
+			if (tasks == 0 && !pending.isEmpty()) {
+				LockSupport.parkNanos("savestate-practice: waiting for chunk loads", WAIT_STEP_NANOS);
+			}
+		}
+		for (ChunkPos pos : pending) {
+			chunkManager.getChunk(pos.x, pos.z, ChunkStatus.FULL, true);
+		}
+		if (!pending.isEmpty()) {
+			SavestateMod.LOGGER.warn("[memory] {}: {} chunks were not loaded in time and were loaded synchronously", world.getRegistryKey().getValue(), pending.size());
+		}
+	}
+
+	/** 復元が途中で失敗したときに、付けたままの復元用のチケットを外す。 */
+	void releaseRestoreTickets(ServerWorld world) {
+		ServerChunkManager chunkManager = world.getChunkManager();
+		for (long k : this.journal.snapshotLoaded) {
+			ChunkPos pos = new ChunkPos(k);
+			chunkManager.removeTicket(RESTORE_TICKET, pos, 0, pos);
+		}
+	}
+
 	/** 復元の準備。ワールドには手を入れず、スナップショットのまた複製を作る (失敗しても何も変わらない)。 */
 	Prepared prepare(SharePolicy chunkPolicy) {
 		return new Prepared(new DeepCloner(chunkPolicy).copyAll(this.chunkData), new DeepCloner(chunkPolicy).copy(this.poi));
 	}
 
 	/**
-	 * {@link #restore} の前に呼ぶ。取得時に読み込まれていて今は読み込まれていないチャンクを同期で読み込み
+	 * {@link #restore} の前に呼ぶ。取得時に読み込まれていて今は読み込まれていないチャンクを読み込み
 	 * ({@link #restore} で戻せるように)、POI をメモリとディスクの両方で戻す。
 	 * 取得後に読み込まれたチャンクはここでは扱わず、{@link #rewriteJournalChunks} で戻す。
-	 * 同期で読み込んだチャンク数を返す。
+	 * 読み込んだチャンク数を返す。
 	 */
 	int restoreOutside(ServerWorld world, Prepared prepared) {
 		ServerChunkManager chunkManager = world.getChunkManager();
@@ -425,20 +481,20 @@ final class WorldChunksSnapshot {
 		// 外す途中のチャンクも getChunk(..., false) では取れてしまい、そこへ記録の NBT やエンティティを入れると、
 		// 直後の取り外しで内容が失われたり、どのチャンクにも属さないエンティティが残ったりするため
 		flushUnloads(world);
-		int syncLoaded = 0;
+		List<ChunkPos> missing = new ArrayList<>();
 		for (long key : this.chunkKeys) {
 			ChunkPos pos = new ChunkPos(key);
 			if (world.getChunk(pos.x, pos.z, ChunkStatus.FULL, false) == null) {
-				chunkManager.getChunk(pos.x, pos.z, ChunkStatus.FULL, true);
-				syncLoaded++;
+				missing.add(pos);
 			}
 		}
+		loadAll(world, missing);
 
 		// loadedAfter をここでその場に当ててエンティティを入れると、直後の取り外しとの順序の問題で、
 		// どのチャンクにも属さないエンティティが残った。集合をそろえる段階で外れるのを待ってから書き戻す
 
 		this.restorePoi(world, prepared.poi);
-		return syncLoaded;
+		return missing.size();
 	}
 
 	/**

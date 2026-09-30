@@ -212,6 +212,12 @@ public final class MemorySnapshot {
 			this.apply(server, prepared);
 		} catch (Throwable t) {
 			SavestateMod.LOGGER.error("[memory] restore failed while modifying the world", t);
+			for (ServerWorld world : server.getWorlds()) {
+				WorldSnap ws = this.worlds.get(world.getRegistryKey());
+				if (ws != null) {
+					ws.chunks.releaseRestoreTickets(world);
+				}
+			}
 			if (undo != null) {
 				ChunkJournal.endRestore(journals);
 				journals.clear();

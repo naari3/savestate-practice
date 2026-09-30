@@ -27,8 +27,10 @@ public final class DetCheck {
 	private static final net.minecraft.network.PacketByteBuf SECTION_BUF = new net.minecraft.network.PacketByteBuf(io.netty.buffer.Unpooled.buffer());
 	private static volatile boolean armed;
 	private static int runIndex = -1;
-	/** 調査用: UUID の先頭が一致する ("type:種類" なら種類が一致する) エンティティを tick 0〜2 でファイルに書き出す。 */
+	/** 調査用: UUID の先頭が一致する ("type:種類" なら種類が一致する) エンティティを DUMP_TICKS の範囲でファイルに書き出す。 */
 	private static final String DUMP_ENTITY = System.getProperty("savestate-practice.detcheck.dump");
+	/** 書き出す tick の範囲 ("from-to"、既定は 0-2)。 */
+	private static final int[] DUMP_TICKS = parseRange(System.getProperty("savestate-practice.detcheck.dumpTicks", "0-2"));
 	private static volatile int ticksToRecord;
 	private static volatile List<Map<String, String>> recording;
 	private static volatile List<Map<String, String>> finished;
@@ -101,6 +103,12 @@ public final class DetCheck {
 		return sb.toString();
 	}
 
+	private static int[] parseRange(String s) {
+		String[] parts = s.split("-", 2);
+		int from = Integer.parseInt(parts[0].trim());
+		return new int[] { from, parts.length > 1 ? Integer.parseInt(parts[1].trim()) : from };
+	}
+
 	private static void dumpEntity(MinecraftServer server, int tick) {
 		for (ServerWorld world : server.getWorlds()) {
 			for (Entity e : world.iterateEntities()) {
@@ -122,7 +130,7 @@ public final class DetCheck {
 
 	private static Map<String, String> snapshot(MinecraftServer server) {
 		List<Map<String, String>> r = recording;
-		if (DUMP_ENTITY != null && r != null && r.size() < 3) {
+		if (DUMP_ENTITY != null && r != null && r.size() >= DUMP_TICKS[0] && r.size() <= DUMP_TICKS[1]) {
 			dumpEntity(server, r.size());
 		}
 		Map<String, String> m = new TreeMap<>();

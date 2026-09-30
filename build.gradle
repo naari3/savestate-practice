@@ -40,6 +40,9 @@ loom {
 			if (project.hasProperty("detcheckDump")) {
 				vmArg "-Dsavestate-practice.detcheck.dump=${project.property('detcheckDump')}"
 			}
+			if (project.hasProperty("detcheckDumpTicks")) {
+				vmArg "-Dsavestate-practice.detcheck.dumpTicks=${project.property('detcheckDumpTicks')}"
+			}
 			if (project.hasProperty("detcheckTicks")) {
 				vmArg "-Dsavestate-practice.detcheck.ticks=${project.property('detcheckTicks')}"
 			}
