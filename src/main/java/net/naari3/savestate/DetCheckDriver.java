@@ -145,7 +145,7 @@ public final class DetCheckDriver {
 				break;
 			case DISTURBING:
 				disturbTicks++;
-				if (disturbTicks == DISTURB_FAR_TICKS) {
+				if (disturbTicks == DISTURB_FAR_TICKS && !"block".equals(DISTURB)) {
 					client.getServer().execute(DetCheckDriver::disturbFar);
 				}
 				if (disturbTicks >= DISTURB_FAR_TICKS + 40) {
@@ -170,6 +170,20 @@ public final class DetCheckDriver {
 		server.execute(() -> {
 			ServerPlayerEntity player = server.getPlayerManager().getPlayerList().get(0);
 			ServerWorld world = player.getServerWorld();
+			if ("block".equals(DISTURB)) {
+				// 復帰位置 (今いる位置) をブロックで埋め、プレイヤーはそのままにする。
+				// 復元の直前に、復帰位置にブロックがある状態を作る
+				BlockPos feet = player.getBlockPos();
+				for (int dx = -1; dx <= 1; dx++) {
+					for (int dz = -1; dz <= 1; dz++) {
+						for (int dy = 0; dy <= 2; dy++) {
+							world.setBlockState(feet.add(dx, dy, dz), Blocks.STONE.getDefaultState());
+						}
+					}
+				}
+				SavestateMod.LOGGER.info("[DetCheck] disturbance: filled the player's position {} with stone", feet);
+				return;
+			}
 			if ("end".equals(DISTURB)) {
 				disturbDragonFight(world);
 			} else {

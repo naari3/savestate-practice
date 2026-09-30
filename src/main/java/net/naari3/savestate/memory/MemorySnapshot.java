@@ -411,7 +411,10 @@ public final class MemorySnapshot {
 
 		timer.mark("entities");
 
-		// 5. プレイヤーの後始末とクライアントへの同期
+		// 5. プレイヤーの後始末とクライアントへの同期。位置より先に、戻したブロックをクライアントへ送る
+		for (ServerWorld world : server.getWorlds()) {
+			WorldChunksSnapshot.flushBlockUpdates(world);
+		}
 		for (Map.Entry<ServerPlayerEntity, PlayerBefore> en : before.entrySet()) {
 			en.getValue().afterRestore(en.getKey());
 		}

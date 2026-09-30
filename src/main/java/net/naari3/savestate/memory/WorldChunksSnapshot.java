@@ -279,6 +279,21 @@ final class WorldChunksSnapshot {
 		}
 	}
 
+	/**
+	 * 予約してあるブロックの変更 (markForUpdate) を、今すぐクライアントへ送る。通常は次の tick の tickChunks で送られる。
+	 * 復元ではプレイヤーの位置の同期をすぐ送るので、先にブロックを送っておかないと、クライアントは古いブロックのまま
+	 * 復帰位置に置かれ、埋まったブロックから押し出されるなどして位置がずれる。送るだけで、サーバーの状態は変えない。
+	 */
+	static void flushBlockUpdates(ServerWorld world) {
+		for (ChunkHolder holder : ((ThreadedAnvilChunkStorageAccess) world.getChunkManager().threadedAnvilChunkStorage).savestate$chunkHolders()) {
+			// vanilla (ServerChunkManager.tickChunks) と同じく、tick 対象のチャンクだけ
+			WorldChunk chunk = holder.getWorldChunk();
+			if (chunk != null) {
+				holder.flushUpdates(chunk);
+			}
+		}
+	}
+
 	/** 読み込み済み (FULL) のチャンクの位置。 */
 	static Set<Long> fullChunkKeys(ServerWorld world) {
 		Set<Long> keys = new HashSet<>();

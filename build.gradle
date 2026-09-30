@@ -25,7 +25,7 @@ loom {
 			if (project.hasProperty("savestateMode")) {
 				vmArg "-Dmcsr-savestate.mode=${project.property('savestateMode')}"
 			}
-			// かき乱し: -PdetcheckDisturb=far|dim|end
+			// かき乱し: -PdetcheckDisturb=far|dim|end|block
 			if (project.hasProperty("detcheckDisturb")) {
 				vmArg "-Dmcsr-savestate.detcheck.disturb=${project.property('detcheckDisturb') ?: 'far'}"
 			}
