@@ -64,16 +64,15 @@ final class PlayerBefore {
 		player.setCameraPosition(this.cameraPosition);
 		world.getChunkManager().updateCameraPosition(player);
 
-		// 保存時にクライアントへ送る予定だったエンティティ削除は、今のクライアントには関係ない
+		// 取得時にクライアントへ送る予定だったエンティティ削除は、今のクライアントには関係ない
 		((ServerPlayerEntityAccessor) player).savestate$getRemovedEntities().clear();
 
-		// 画面: 復元前に開いていた画面は閉じる。スナップショットで開いていた画面 (チェストなど) は再現せず、インベントリに戻す
+		// スナップショットで開いていた画面 (チェストなど) は再現せず、インベントリに戻す
 		if (this.openScreenSyncId != 0) {
 			player.networkHandler.sendPacket(new CloseScreenS2CPacket(this.openScreenSyncId));
 		}
 		player.currentScreenHandler = player.playerScreenHandler;
 
-		// 位置・速度
 		player.networkHandler.requestTeleport(player.getX(), player.getY(), player.getZ(), player.yaw, player.pitch);
 		player.networkHandler.sendPacket(new EntityVelocityUpdateS2CPacket(player));
 
@@ -82,12 +81,10 @@ final class PlayerBefore {
 		((ServerPlayerEntityAccessor) player).savestate$setSyncedFoodLevel(-1);
 		((ServerPlayerEntityAccessor) player).savestate$setSyncedExperience(-1);
 
-		// インベントリ・持っているスロット・能力
 		player.onHandlerRegistered(player.playerScreenHandler, player.playerScreenHandler.getStacks());
 		player.networkHandler.sendPacket(new HeldItemChangeS2CPacket(player.inventory.selectedSlot));
 		player.sendAbilitiesUpdate();
 
-		// ステータス効果: 復元前のものを消し、スナップショットのものを付け直す
 		for (StatusEffectInstance e : this.effects) {
 			player.networkHandler.sendPacket(new RemoveEntityStatusEffectS2CPacket(player.getEntityId(), e.getEffectType()));
 		}

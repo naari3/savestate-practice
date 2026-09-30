@@ -48,7 +48,6 @@ import net.naari3.savestate.SavestateMod;
  * - 深い再帰を避けるため、「割り当て」と「フィールドの充填」を分け、充填は作業キューで順に行う
  * - ハッシュ・ソート系のコレクションへの要素の投入は、全オブジェクトの充填が終わってから行う (第 2 段階)。
  *   要素の hashCode / compareTo がフィールドの値に依存しうるため
- * - 共有するかどうかは {@link SharePolicy} で決める
  * - JDK のクラスは中身をリフレクションで触れない (Java 16 以降) ので、主要なものを公開 API で作り直す
  *
  * 1 インスタンスは 1 回の複製 (1 つの対応表) に使う。
@@ -173,7 +172,6 @@ public final class DeepCloner {
 		this.deferredWrites.clear();
 	}
 
-	/** 複製したクラスごとの個数 (調査用)。 */
 	public Map<Class<?>, Integer> getClonedCounts() {
 		return this.clonedCounts;
 	}
@@ -389,7 +387,6 @@ public final class DeepCloner {
 			return this.put(o, new ReentrantReadWriteLock());
 		}
 		String n = c.getName();
-		// Collections.unmodifiableXxx / singletonXxx / Arrays.asList: 中身を複製して同じ種類で包み直す
 		if (n.startsWith("java.util.Collections$Unmodifiable") || n.startsWith("java.util.Collections$Singleton")
 			|| n.equals("java.util.Arrays$ArrayList") || n.startsWith("java.util.Collections$Synchronized")) {
 			return this.rewrapCollection(o, n);

@@ -17,7 +17,6 @@ public interface SerializingRegionBasedStorageAccessor {
 	@Accessor("loadedElements")
 	Long2ObjectMap<Optional<?>> savestate$getLoadedElements();
 
-	/** ディスクへの保存待ちのセクション。 */
 	@Accessor("unsavedElements")
 	LongLinkedOpenHashSet savestate$getUnsavedElements();
 }

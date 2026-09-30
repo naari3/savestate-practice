@@ -19,9 +19,8 @@ public final class SavestateKeys {
 	public static final KeyBinding LOAD = new KeyBinding("key.savestate-practice.load", GLFW.GLFW_KEY_F7, CATEGORY);
 	public static final KeyBinding NEXT_SLOT = new KeyBinding("key.savestate-practice.next_slot", GLFW.GLFW_KEY_F8, CATEGORY);
 	public static final KeyBinding PREV_SLOT = new KeyBinding("key.savestate-practice.prev_slot", GLFW.GLFW_KEY_UNKNOWN, CATEGORY);
-	/** 直前の load を取り消す (初期状態では割り当てなし)。 */
 	public static final KeyBinding UNDO = new KeyBinding("key.savestate-practice.undo", GLFW.GLFW_KEY_UNKNOWN, CATEGORY);
-	/** 決定論の検査 (debug 時のみ登録)。 */
+	/** 決定論の検査 (DetCheckDriver)。 */
 	public static final KeyBinding DETCHECK = SavestateDebug.ENABLED
 		? new KeyBinding("key.savestate-practice.detcheck", GLFW.GLFW_KEY_F9, CATEGORY)
 		: null;
@@ -35,7 +34,7 @@ public final class SavestateKeys {
 			: new KeyBinding[] { SAVE, LOAD, NEXT_SLOT, PREV_SLOT, UNDO };
 	}
 
-	/** onInitializeClient から呼ぶ (options.txt が読まれる前)。 */
+	/** options.txt が読まれる前 (onInitializeClient) に呼ぶ。 */
 	static void register() {
 		if (FabricLoader.getInstance().isModLoaded("fabric-key-binding-api-v1")) {
 			KeyBindingApiCompat.register(all());

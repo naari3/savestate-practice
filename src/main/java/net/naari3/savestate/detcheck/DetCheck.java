@@ -20,14 +20,14 @@ import net.naari3.savestate.rng.RngState;
  * 決定論の検査 (サーバー側)。
  *
  * loadstate 後に tick が再開した時点から、毎 tick の終わりにワールドの状態を要約して記録する。
- * 要約は「項目名 → 値の文字列」の対応で、RNG の状態、ワールドの時刻、全エンティティの位置・速度・向き・Random・体力を含む。
+ * 要約は「項目名 → 値の文字列」の対応 (中身は {@link #snapshot} と {@link #snapshotChunks})。
  * 同じスロットから複数回 load した記録を {@link #compare} で比べ、最初にずれた tick と項目を報告する。
  */
 public final class DetCheck {
 	private static final net.minecraft.network.PacketByteBuf SECTION_BUF = new net.minecraft.network.PacketByteBuf(io.netty.buffer.Unpooled.buffer());
 	private static volatile boolean armed;
 	private static int runIndex = -1;
-	/** 調査用: この UUID (先頭 8 文字) のエンティティを tick 0〜2 でファイルに書き出す。 */
+	/** 調査用: UUID の先頭が一致する ("type:種類" なら種類が一致する) エンティティを tick 0〜2 でファイルに書き出す。 */
 	private static final String DUMP_ENTITY = System.getProperty("savestate-practice.detcheck.dump");
 	private static volatile int ticksToRecord;
 	private static volatile List<Map<String, String>> recording;
@@ -86,12 +86,10 @@ public final class DetCheck {
 		return r;
 	}
 
-	/** 今の状態の要約 (検査と同じ内容)。 */
 	public static Map<String, String> describe(MinecraftServer server) {
 		return snapshot(server);
 	}
 
-	/** 2 つの要約の違いを 1 行で (違う項目の数と、最初のいくつか)。 */
 	public static String summarizeDiff(Map<String, String> a, Map<String, String> b) {
 		List<String> diffs = diffKeys(a, b);
 		StringBuilder sb = new StringBuilder();
@@ -153,10 +151,6 @@ public final class DetCheck {
 		return m;
 	}
 
-	/**
-	 * 読み込み済みのチャンクごとに、ブロックの状態のハッシュを取る。
-	 * 全ブロックを毎 tick 数えると重いので、チャンク内の非空の ChunkSection について PalettedContainer の中身から計算する。
-	 */
 	private static void snapshotChunks(ServerWorld world, String w, Map<String, String> m) {
 		int loaded = 0;
 		int ticking = 0;
@@ -185,7 +179,6 @@ public final class DetCheck {
 				}
 			}
 			h = h * 31 + chunk.getBlockEntities().size();
-			// ブロックエンティティの中身 (位置順に NBT の文字列)
 			List<net.minecraft.util.math.BlockPos> bePositions = new ArrayList<>(chunk.getBlockEntities().keySet());
 			bePositions.sort(null);
 			for (net.minecraft.util.math.BlockPos p : bePositions) {

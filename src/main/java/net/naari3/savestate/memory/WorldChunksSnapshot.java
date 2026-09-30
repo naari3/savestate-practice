@@ -54,14 +54,14 @@ import net.naari3.savestate.mixin.accessor.ServerWorldAccessor;
 import net.naari3.savestate.mixin.accessor.WorldChunkAccessor;
 
 /**
- * 1 つのワールドの、読み込み済みチャンクの状態のスナップショット (段階 2)。
+ * 1 つのワールドのチャンクの状態のスナップショット。
  *
- * - チャンクごと: ChunkSection (ブロックの状態)、ハイトマップ、ブロックエンティティ、inhabitedTime
- * - ワールドごと: ブロックエンティティのリストの並び (tick の順序)、スケジュール済みの tick (ブロック・流体)、ブロックイベントのキュー
+ * - チャンクごと: ChunkSection、ハイトマップ、ブロックエンティティ、inhabitedTime
+ * - ワールドごと: ブロックエンティティのリストの並び (tick の順序)、スケジュール済みの tick、ブロックイベントのキュー、POI
  *
  * 復元では setBlockState を使わない (置き換え時の処理、例えばチェストの中身をばらまく処理が走ってしまうため)。
  * ChunkSection を差し替え、変わったブロックについてだけ光の再計算とクライアントへの更新を行う。
- * 保存時に読み込まれていなかったチャンク、復元時に読み込まれていないチャンクは扱わない (段階 3)。
+ * 取得時に読み込まれていなかったチャンクは、{@link ChunkJournal} の記録を使って {@link #rewriteJournalChunks} で戻す。
  */
 final class WorldChunksSnapshot {
 	private final List<Long> chunkKeys = new ArrayList<>();
@@ -73,13 +73,11 @@ final class WorldChunksSnapshot {
 	private final List<ScheduledTick<Block>> blockTicks;
 	private final List<ScheduledTick<Fluid>> fluidTicks;
 	private final List<BlockEvent> blockEvents;
-	/** 取得時に tick 対象 (ticking) だったチャンク。 */
 	private Set<Long> tickingKeys;
-	/** POI のセクションごとの中身 (複製済み)。 */
+	/** セクションごと。複製済み。 */
 	private Map<Long, Optional<?>> poi;
 	/** 取得時にまだディスクへ保存されていなかった POI セクション (保存される順)。 */
 	private final List<Long> poiUnsaved = new ArrayList<>();
-	/** 取得後の、読み込み済みチャンク以外への変化の記録。 */
 	private ChunkJournal journal;
 
 	private WorldChunksSnapshot(List<Object[]> chunkData, List<ScheduledTick<Block>> blockTicks, List<ScheduledTick<Fluid>> fluidTicks, List<BlockEvent> blockEvents) {
@@ -152,7 +150,7 @@ final class WorldChunksSnapshot {
 	 * 読み込み済みのチャンクの集合を、取得時と同じにそろえる (ワールドは進めない)。
 	 * チケットの期限切れの処理、チケットの反映、読み込みを外す処理、保留中のタスクの実行を、
 	 * 集合が取得時と同じになるか、変化しなくなるまで繰り返す。
-	 * 取得後に読み込まれたチャンクは、中身を取得時点相当に戻してあるので、外すときにその内容でディスクに保存される。
+	 * 取得後に読み込まれたチャンクは外すときに今の内容で保存されるので、この後 {@link #rewriteJournalChunks} で上書きする。
 	 * 戻り値は {繰り返した回数, かかった時間 (ms), そろえた後の読み込み済みチャンク数, 取得時にあって今ないチャンク数, 取得時になくて今あるチャンク数}。
 	 */
 	int[] convergeLoadedSet(ServerWorld world) {
@@ -294,7 +292,6 @@ final class WorldChunksSnapshot {
 		}
 	}
 
-	/** 読み込み済み (FULL) のチャンクの位置。 */
 	static Set<Long> fullChunkKeys(ServerWorld world) {
 		Set<Long> keys = new HashSet<>();
 		for (ChunkHolder holder : ((ThreadedAnvilChunkStorageAccess) world.getChunkManager().threadedAnvilChunkStorage).savestate$chunkHolders()) {
@@ -305,7 +302,7 @@ final class WorldChunksSnapshot {
 		return keys;
 	}
 
-	/** 読み込み済み (FULL。tick されない境界のチャンクも含む) の WorldChunk。 */
+	/** getWorldChunk() と違い、tick されない境界のチャンクも返す。 */
 	static WorldChunk fullChunk(ChunkHolder holder) {
 		com.mojang.datafixers.util.Either<WorldChunk, ChunkHolder.Unloaded> e = holder.getBorderFuture().getNow(null);
 		return e == null ? null : e.left().orElse(null);
@@ -393,15 +390,6 @@ final class WorldChunksSnapshot {
 		this.journal.deactivate();
 	}
 
-	/**
-	 * 読み込み済みチャンク以外の復元 ({@link #restore} の前に呼ぶ)。
-	 * - 取得時に読み込まれていて今は読み込まれていないチャンクを、同期で読み込む ({@link #restore} で戻せるように)
-	 * - 取得後に読み込まれたチャンク: 今も読み込まれていれば記録した NBT をその場で当て、読み込まれていなければ (保存されていれば) ディスクに書き戻す
-	 * - POI をメモリとディスクの両方で戻す
-	 * 記録した NBT から作るエンティティの NBT を entityTags に足す (エンティティの入れ替えの後で作る)。
-	 * 戻り値は {同期で読み込んだチャンク数, その場で当てたチャンク数, ディスクに書き戻したチャンク数}。
-	 */
-	/** 復元の準備で作る、生きたワールドに入れるための複製 (チャンクのデータと POI)。 */
 	static final class Prepared {
 		final List<Object[]> chunks;
 		final Map<Long, Optional<?>> poi;
@@ -417,6 +405,12 @@ final class WorldChunksSnapshot {
 		return new Prepared(new DeepCloner(chunkPolicy).copyAll(this.chunkData), new DeepCloner(chunkPolicy).copy(this.poi));
 	}
 
+	/**
+	 * {@link #restore} の前に呼ぶ。取得時に読み込まれていて今は読み込まれていないチャンクを同期で読み込み
+	 * ({@link #restore} で戻せるように)、POI をメモリとディスクの両方で戻す。
+	 * 取得後に読み込まれたチャンクはここでは扱わず、{@link #rewriteJournalChunks} で戻す。
+	 * 戻り値は {同期で読み込んだチャンク数, 0, 0}。
+	 */
 	int[] restoreOutside(ServerWorld world, Prepared prepared) {
 		ServerChunkManager chunkManager = world.getChunkManager();
 		// 途中まで進んでいる「読み込みを外す処理」を先に終わらせ、各チャンクを「読み込まれている」か「外れて保存済み」のどちらかにする。
@@ -432,9 +426,8 @@ final class WorldChunksSnapshot {
 			}
 		}
 
-		// 取得後に読み込まれたチャンク (loadedAfter) は、ここでは触らない。読み込み済みのチャンクの集合をそろえる段階ですべて外れるので、
-		// 外れた後に記録した NBT をディスクへ書き戻す (rewriteJournalChunks)。
-		// その場に当ててエンティティを入れる方式は、直後の取り外しとの順序の問題で、どのチャンクにも属さないエンティティが残った
+		// loadedAfter をここでその場に当ててエンティティを入れると、直後の取り外しとの順序の問題で、
+		// どのチャンクにも属さないエンティティが残った。集合をそろえる段階で外れるのを待ってから書き戻す
 
 		this.restorePoi(world, prepared.poi);
 		return new int[] { syncLoaded, 0, 0 };
@@ -472,9 +465,8 @@ final class WorldChunksSnapshot {
 		for (Map.Entry<Long, Optional<?>> e : fresh.entrySet()) {
 			acc.savestate$getLoadedElements().put(e.getKey(), e.getValue());
 		}
-		// 未保存のセクションも取得時と同じにする。取得後にディスクへ書かれた分は、下で取得時のディスクの内容に戻すので、
+		// 取得後にディスクへ書かれた分は下で取得時のディスクの内容に戻すので、
 		// メモリ・未保存の集合・ディスクの 3 つが取得時と同じになる
-		// (以前はすべてのセクションを未保存にしていたが、復元のたびに全セクションを書き直すことになり遅かった)
 		for (long key : this.poiUnsaved) {
 			acc.savestate$getUnsavedElements().add(key);
 		}
@@ -497,7 +489,6 @@ final class WorldChunksSnapshot {
 		ServerChunkManager chunkManager = world.getChunkManager();
 		ServerLightingProvider lighting = chunkManager.getLightingProvider();
 
-		// ブロック
 		ChunkSection[] fresh = new ChunkSection[16];
 		ListTag sections = level.getList("Sections", 10);
 		for (int i = 0; i < sections.size(); i++) {
@@ -528,7 +519,6 @@ final class WorldChunksSnapshot {
 		WorldChunkAccessor acc = (WorldChunkAccessor) chunk;
 		Heightmap.populateHeightmaps(chunk, EnumSet.copyOf(acc.savestate$getHeightmaps().keySet()));
 
-		// ブロックエンティティ
 		Map<BlockPos, BlockEntity> beMap = acc.savestate$getBlockEntities();
 		for (BlockEntity be : beMap.values()) {
 			be.markRemoved();
@@ -548,7 +538,7 @@ final class WorldChunksSnapshot {
 			}
 		}
 
-		// スケジュール済みの tick: このチャンクの分を外して、記録したものを入れ直す (時刻は記録時からの相対)
+		// NBT の tick の時刻は記録時からの相対
 		world.getBlockTickScheduler().getScheduledTicksInChunk(pos, true, false);
 		world.getFluidTickScheduler().getScheduledTicksInChunk(pos, true, false);
 		scheduleFromNbt(level.getList("TileTicks", 10), world.getBlockTickScheduler(), Registry.BLOCK::get);
@@ -578,7 +568,7 @@ final class WorldChunksSnapshot {
 			.savestate$getPointOfInterestStorage();
 	}
 
-	/** 戻したチャンクの数、見つからなかったチャンクの数、変わったブロックの数を返す。 */
+	/** 戻り値は {戻したチャンク数, 見つからなかったチャンク数, 変わったブロック数}。 */
 	int[] restore(ServerWorld world, Prepared prepared) {
 		List<Object[]> fresh = prepared.chunks;
 		ServerChunkManager chunkManager = world.getChunkManager();
@@ -599,7 +589,6 @@ final class WorldChunksSnapshot {
 			WorldChunkAccessor acc = (WorldChunkAccessor) chunk;
 			Object[] data = fresh.get(i);
 
-			// 1. 今のブロックエンティティを外す (チャンクのマップとワールドのリストから)
 			Map<BlockPos, BlockEntity> beMap = acc.savestate$getBlockEntities();
 			for (BlockEntity be : beMap.values()) {
 				be.markRemoved();
@@ -607,7 +596,6 @@ final class WorldChunksSnapshot {
 			}
 			beMap.clear();
 
-			// 2. ChunkSection を差し替える。中身が変わったセクションだけ、変わったブロックを光とクライアントに知らせる
 			ChunkSection[] live = chunk.getSectionArray();
 			ChunkSection[] snapSections = (ChunkSection[]) data[0];
 			for (int y = 0; y < live.length; y++) {
@@ -623,13 +611,11 @@ final class WorldChunksSnapshot {
 				}
 			}
 
-			// 3. ハイトマップ
 			@SuppressWarnings("unchecked")
 			Map<Heightmap.Type, Heightmap> heightmaps = (Map<Heightmap.Type, Heightmap>) data[1];
 			acc.savestate$getHeightmaps().clear();
 			acc.savestate$getHeightmaps().putAll(heightmaps);
 
-			// 4. ブロックエンティティを入れる
 			@SuppressWarnings("unchecked")
 			Map<BlockPos, BlockEntity> snapBes = (Map<BlockPos, BlockEntity>) data[2];
 			for (Map.Entry<BlockPos, BlockEntity> e : snapBes.entrySet()) {
@@ -645,11 +631,10 @@ final class WorldChunksSnapshot {
 			restoredChunks++;
 		}
 
-		// 5. ワールドのブロックエンティティのリスト (tick の順序) を保存時の並びで作り直す
+		// ワールドのブロックエンティティのリストの並びは tick の順序なので、取得時の並びで作り直す
 		rebuildList(world.blockEntities, this.blockEntityOrder, removed, restoredByPos, false);
 		rebuildList(world.tickingBlockEntities, this.tickingBlockEntityOrder, removed, restoredByPos, true);
 
-		// 6. スケジュール済みの tick、ブロックイベント
 		restoreTicks(scheduler(world.getBlockTickScheduler()), this.blockTicks);
 		restoreTicks(scheduler(world.getFluidTickScheduler()), this.fluidTicks);
 		((ServerWorldAccessor) world).savestate$getSyncedBlockEventQueue().clear();
@@ -677,7 +662,7 @@ final class WorldChunksSnapshot {
 				out.add(be);
 			}
 		}
-		// 保存時のリストになかったもの (戻したチャンクで新しく増えたもの、戻さなかったチャンクのもの) は末尾に足す
+		// 取得時のリストになかったもの (戻したチャンクで新しく増えたもの、戻さなかったチャンクのもの) は末尾に足す
 		for (BlockEntity be : restoredByPos.values()) {
 			if ((!tickingOnly || be instanceof Tickable) && added.add(be)) {
 				out.add(be);

@@ -28,15 +28,13 @@ import org.lwjgl.glfw.GLFW;
 public class SavestateConfig implements SpeedrunConfig {
 	private static SavestateConfig instance;
 
-	/** memory: インメモリ方式 (既定)。disk: ワールドのフォルダを複製して開き直す方式。 */
 	public Settings.Mode mode = Settings.DEFAULT_MODE;
 
-	/** Next / Previous slot で切り替えるスロットの数。 */
 	@Config.Numbers.Whole.Bounds(min = 1, max = Settings.MAX_SLOTS)
 	public int slotCount = Settings.DEFAULT_SLOT_COUNT;
 
-	// キー割り当て。設定画面に並べるための項目で、値はここには持たない (vanilla の操作設定と同じく options.txt に保存する)。
-	// 設定ファイルには null として書かれるが、読み込みでは無視する
+	// 設定画面に並べるための項目で、値はここには持たない (vanilla と同じく options.txt に保存する)。
+	// 設定ファイルには null として書かれ、読み込みでは無視する
 	@Config.Category("keys")
 	@Config.Name("key.savestate-practice.save")
 	public InputUtil.Key saveKey;
@@ -53,7 +51,7 @@ public class SavestateConfig implements SpeedrunConfig {
 	@Config.Name("key.savestate-practice.undo")
 	public InputUtil.Key undoKey;
 
-	/** 割り当て待ちのキー (ボタンを押してから、次のキー入力まで)。 */
+	/** ボタンを押してから次のキー入力まで、割り当て待ちのキー。 */
 	@Config.Ignored
 	private KeyBinding focusedKey;
 
@@ -143,7 +141,6 @@ public class SavestateConfig implements SpeedrunConfig {
 		return text;
 	}
 
-	/** 同じキーが他の操作 (vanilla や他の MOD のものも含む) に割り当てられているか。 */
 	private static boolean conflicts(KeyBinding binding) {
 		if (binding.isUnbound()) {
 			return false;

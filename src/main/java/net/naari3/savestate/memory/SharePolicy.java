@@ -58,13 +58,10 @@ import net.naari3.savestate.SavestateMod;
 /**
  * 複製せずに参照をそのまま使う (共有する) オブジェクトの判定。
  *
- * 共有するもの:
- * - 不変の値 (String、ボックス型、enum、UUID、BlockPos (Mutable を除く)、Vec3d、Box、Identifier、BlockState など)
- * - レジストリに登録されたもの (Block、Item、EntityType、MemoryModuleType など)。起動後に全レジストリの全要素を集める
- * - 自分のクラス階層の static フィールドに入っている定数 (ItemStack.EMPTY、DamageSource.FALL など。== で比較するコードがある)
- * - インスタンスフィールドを 1 つも持たないもの (状態がないので共有して問題ない。匿名の TrackedDataHandler など)
- * - ワールド側の単一インスタンスや、今の段階では戻さないもの (World、サーバー、チャンク、ネットワーク、ワールドのプロパティ (level.dat)、ゲームルール、ワールドボーダーなど)
- * - タグ (FluidTags.WATER などを、fastutil のマップのキーとして同一性で引く箇所がある)
+ * - 自分のクラス階層の static フィールドに入っている定数 (ItemStack.EMPTY、DamageSource.FALL など) は == で比較するコードがあるので共有する
+ * - インスタンスフィールドを持たないもの (匿名の TrackedDataHandler など) は状態がないので共有する
+ * - ワールド側の単一インスタンスと、復元の対象にしないもの (level.dat のプロパティ、ゲームルール、進捗、統計など) は共有する
+ * - タグは FluidTags.WATER などを fastutil のマップのキーとして同一性で引く箇所があるので共有する
  */
 public final class SharePolicy {
 	private static final Set<Class<?>> IMMUTABLE_EXACT = new HashSet<>();
@@ -87,7 +84,6 @@ public final class SharePolicy {
 	private final boolean shareChunkData;
 
 	/**
-	 * @param sharePlayers   プレイヤーを複製せず共有する
 	 * @param shareChunkData ChunkSection とブロックエンティティを複製せず共有する (エンティティの複製では共有、チャンクの複製では複製する)
 	 */
 	public SharePolicy(boolean sharePlayers, boolean shareChunkData) {
@@ -141,7 +137,6 @@ public final class SharePolicy {
 		return this.staticConstantsOf(c).contains(o);
 	}
 
-	/** c とその親クラス (JDK を除く) の static フィールドに入っているオブジェクト。 */
 	private Set<Object> staticConstantsOf(Class<?> c) {
 		Set<Object> set = this.staticConstants.get(c);
 		if (set != null) {
@@ -158,7 +153,6 @@ public final class SharePolicy {
 							set.add(v);
 						}
 					} catch (Throwable ignored) {
-						// 読めない static は無視する
 					}
 				}
 			}

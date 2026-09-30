@@ -32,7 +32,6 @@ public class StatefulRandom extends Random {
 	 */
 	private boolean serverOnly;
 
-	/** 遅延シード。 */
 	public StatefulRandom() {
 		super(0L);
 		this.seeded = false;

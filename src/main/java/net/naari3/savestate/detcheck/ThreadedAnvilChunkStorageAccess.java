@@ -5,7 +5,7 @@ import net.minecraft.world.poi.PointOfInterestStorage;
 
 /** ThreadedAnvilChunkStorage の内部を読むためのインターフェイス。mixin の ThreadedAnvilChunkStorageInvoker が実装する。 */
 public interface ThreadedAnvilChunkStorageAccess {
-	/** 読み込み済みのチャンク。 */
+	/** FULL でない (境界より外の読み込みレベルの) ChunkHolder も含む。currentChunkHolders の複製で、updateHolderMap の時点のもの。 */
 	Iterable<ChunkHolder> savestate$chunkHolders();
 
 	PointOfInterestStorage savestate$getPointOfInterestStorage();

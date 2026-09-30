@@ -26,18 +26,19 @@ import net.naari3.savestate.memory.MemorySnapshot;
 import net.naari3.savestate.rng.RngState;
 
 /**
- * フェーズ 1: ディスク方式の savestate / loadstate。
+ * スロットごとの save / load。方式は Settings.memoryMode() で切り替える。
  *
- * save: サーバースレッド上でワールドを保存し、IO の完了を待ってからワールドフォルダをスロットへ複製する。
- * load: ワールドを閉じ (サーバー停止まで待つ)、ワールドフォルダをスロットの内容と入れ替えて開き直す。
+ * インメモリ方式 (既定): サーバースレッドで MemorySnapshot を取得 / 復元する。load の直前の状態を取り消し用に持つ。
+ * ディスク方式: save はワールドを保存し、POI を含む IO の完了を待ってからワールドフォルダをスロットへ複製する。
+ * load はワールドを閉じ (サーバー停止まで待つ)、ワールドフォルダをスロットの内容と入れ替えて開き直す。
  */
 public final class SavestateManager {
 	private static final String RNG_FILE = "savestate-practice-rng.dat";
 	/** 改名前 (mcsr-savestate) に保存したスロットの RNG ファイル。 */
 	private static final String LEGACY_RNG_FILE = "mcsr-savestate-rng.dat";
-	/** 方式 (インメモリ / ディスク) は Settings.memoryMode() で決まる。スロットは 1 から MAX_SLOTS まで。 */
+	/** 添字 1 から MAX_SLOTS を使う。 */
 	private static final MemorySnapshot[] memorySlots = new MemorySnapshot[Settings.MAX_SLOTS + 1];
-	/** memorySlots を取ったサーバー。別のワールドを開いたら (サーバーが変わったら) 使わない。 */
+	/** memorySlots を取得したサーバー。サーバーが変わったら (別のワールド) スロットは使えない。 */
 	private static IntegratedServer memorySlotServer;
 	/** 直前の load の取り消し用 (load する直前の状態)。 */
 	private static MemorySnapshot lastUndo;
@@ -50,16 +51,7 @@ public final class SavestateManager {
 	private SavestateManager() {
 	}
 
-	private static boolean loggedKeys = false;
-
 	public static void onClientTick(MinecraftClient client) {
-		if (SavestateDebug.ENABLED && !loggedKeys && client.world != null) {
-			// 調査用: キーが設定画面と options.txt の対象 (keysAll) に入ったか、lang が読まれたか
-			loggedKeys = true;
-			SavestateDebug.log("keys registered in options: {}, translated name: {}",
-				java.util.Arrays.asList(client.options.keysAll).contains(SavestateKeys.SAVE),
-				net.minecraft.client.resource.language.I18n.translate(SavestateKeys.SAVE.getTranslationKey()));
-		}
 		if (pendingMessage != null && client.player != null) {
 			overlay(client, pendingMessage);
 			pendingMessage = null;
@@ -158,7 +150,6 @@ public final class SavestateManager {
 		return true;
 	}
 
-	/** 直前の load (インメモリ方式) を取り消し、load する直前の状態に戻す。 */
 	private static void undoLoad(MinecraftClient client) {
 		IntegratedServer server = client.getServer();
 		if (server == null || busy) {
@@ -169,12 +160,12 @@ public final class SavestateManager {
 			overlayError(client, "Nothing to undo");
 			return;
 		}
-		// 取り消しの取り消しもできるように、ここでも取り消し用のスナップショットを取る (restoreMemory が lastUndo を入れ替える)
+		// restoreMemory が lastUndo を新しい取り消し用に入れ替えるので、取り消しの取り消しもできる
 		restoreMemory(client, server, undo, "undo");
 	}
 
 	/**
-	 * snap を復元する。復元の直前の状態を取り消し用のスナップショットとして取り、lastUndo に入れる。
+	 * 復元の直前の状態を取り消し用として取得し、lastUndo に入れる。
 	 * 復元の途中で失敗した場合は、MemorySnapshot 側で取り消し用のスナップショットに戻される。
 	 */
 	private static void restoreMemory(MinecraftClient client, IntegratedServer server, MemorySnapshot snap, String label) {
@@ -196,7 +187,7 @@ public final class SavestateManager {
 			MemorySnapshot old = lastUndo;
 			lastUndo = undo;
 			lastUndoServer = server;
-			// 取り消し用のスナップショットを捨てる。ただし、スロットや今入れたものと同じなら捨てない
+			// 古い取り消し用を捨てる。スロットなどからまだ参照されているものは捨てない
 			if (old != null && old != undo && old != snap && !isSlotted(old)) {
 				old.dispose();
 			}
@@ -280,7 +271,7 @@ public final class SavestateManager {
 		loadSlot(client, currentSlot);
 	}
 
-	/** load を開始できたら true。 */
+	/** load を開始できたら true (完了は非同期)。 */
 	public static boolean loadSlot(MinecraftClient client, int slot) {
 		return Settings.memoryMode() ? loadMemory(client, slot) : loadDisk(client, slot);
 	}
@@ -353,7 +344,6 @@ public final class SavestateManager {
 		try {
 			WorldFiles.moveWithRetry(tmp, worldDir);
 		} catch (IOException e) {
-			// 差し替えに失敗したら元のワールドを戻す
 			WorldFiles.moveWithRetry(old, worldDir);
 			throw e;
 		}

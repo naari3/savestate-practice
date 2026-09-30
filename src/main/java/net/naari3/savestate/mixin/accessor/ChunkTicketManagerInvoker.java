@@ -10,7 +10,6 @@ public interface ChunkTicketManagerInvoker {
 	@Invoker("purge")
 	void savestate$purge();
 
-	/** 調査用: その位置に付いているチケットの文字列。 */
 	@Invoker("getTicket")
 	String savestate$getTicket(long pos);
 }

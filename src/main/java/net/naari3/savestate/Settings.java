@@ -29,7 +29,6 @@ public final class Settings {
 	private Settings() {
 	}
 
-	/** onInitializeClient から呼ぶ。 */
 	static void init() {
 		if (HAS_SPEEDRUNAPI) {
 			SavestateMod.LOGGER.info("Using SpeedrunAPI for settings");
@@ -61,7 +60,7 @@ public final class Settings {
 		}
 	}
 
-	/** インメモリ方式か。-Dsavestate-practice.mode=memory|disk があればそちらを優先する (検査用)。 */
+	/** -Dsavestate-practice.mode=memory|disk があればそちらを優先する (検査用)。 */
 	public static boolean memoryMode() {
 		String override = System.getProperty("savestate-practice.mode");
 		if (override != null) {

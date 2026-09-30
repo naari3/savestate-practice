@@ -14,7 +14,7 @@ public final class SavestateDebug {
 		return FAIL_APPLY_AT > 0;
 	}
 
-	/** 復元の適用段階から呼ぶ。N 回目なら例外を投げる。 */
+	/** 復元の適用段階から呼ぶ。 */
 	public static void maybeInjectFault() {
 		if (FAIL_APPLY_AT > 0 && ++restoreCount == FAIL_APPLY_AT) {
 			throw new IllegalStateException("[debug] injected failure during restore #" + restoreCount);

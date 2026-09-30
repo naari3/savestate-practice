@@ -43,10 +43,13 @@ public final class DetCheckDriver {
 	private static final int AUTO_SLOT = Settings.MAX_SLOTS;
 	private static final int SETTLE_TICKS = 40;
 	/**
-	 * かき乱しの種類 (null ならかき乱さない)。
+	 * かき乱し (-Dsavestate-practice.detcheck.disturb=<種類>)。null ならかき乱さない。
+	 * 2 回目以降の load の前に行う。読み込み済みチャンク以外の復元 (ChunkJournal) が正しければ、それでも記録は 1 回目と一致するはず。
 	 * far: 取得時のチャンクを変更 → 同じディメンションで 800 ブロック先へ移動 → 新しいチャンクを変更
 	 * dim: 取得時のチャンクを変更 → 別のディメンションへ移動 (オーバーワールド ⇔ ネザー。エンドからはオーバーワールド) → そこでブロックを変更
 	 * end: ドラゴンに大ダメージを与え、エンドクリスタルを壊す → オーバーワールドへ移動 → そこでブロックを変更
+	 * block: 今いる位置 (復帰位置) を石で埋める。プレイヤーは動かさない
+	 * 移動する種類では、DISTURB_FAR_TICKS 待って元のチャンクの読み込みを外させ (ディスクに書かせ) てから移動先を変更する。
 	 */
 	private static final String DISTURB = System.getProperty("savestate-practice.detcheck.disturb");
 	/** 取得する場所 (overworld / nether / end)。null ならワールドを開いた場所のまま。 */
@@ -120,7 +123,6 @@ public final class DetCheckDriver {
 						break;
 					}
 					if ("end".equals(START) && !dragonPresent(client.getServer()) && settle < 1200) {
-						// エンドではドラゴンが出現するまで待つ
 						break;
 					}
 					state = State.SAVING;
@@ -158,11 +160,7 @@ public final class DetCheckDriver {
 		}
 	}
 
-	/**
-	 * かき乱し (-Dsavestate-practice.detcheck.disturb=true): 2 回目以降の復元の前に、取得時に読み込まれていたチャンクを変更し、
-	 * プレイヤーを遠くへ飛ばして元のチャンクの読み込みを外させ (ディスクに書かせ)、飛んだ先の新しいチャンクも変更する。
-	 * 読み込み済みチャンク以外の復元 (ChunkJournal) が正しければ、それでも復元後の記録は 1 回目と一致するはず。
-	 */
+	/** 種類ごとの内容は DISTURB を参照。 */
 	private static void startDisturbance(MinecraftClient client) {
 		state = State.DISTURBING;
 		disturbTicks = 0;
@@ -171,8 +169,6 @@ public final class DetCheckDriver {
 			ServerPlayerEntity player = server.getPlayerManager().getPlayerList().get(0);
 			ServerWorld world = player.getServerWorld();
 			if ("block".equals(DISTURB)) {
-				// 復帰位置 (今いる位置) をブロックで埋め、プレイヤーはそのままにする。
-				// 復元の直前に、復帰位置にブロックがある状態を作る
 				BlockPos feet = player.getBlockPos();
 				for (int dx = -1; dx <= 1; dx++) {
 					for (int dz = -1; dz <= 1; dz++) {
@@ -222,7 +218,6 @@ public final class DetCheckDriver {
 		SavestateMod.LOGGER.info("[DetCheck] disturbance: placed gold near {} (new chunks)", top);
 	}
 
-	/** ドラゴンに大ダメージを与え、エンドクリスタルをすべて壊す。 */
 	private static void disturbDragonFight(ServerWorld world) {
 		int crystals = 0;
 		for (Entity e : world.iterateEntities()) {
@@ -252,7 +247,7 @@ public final class DetCheckDriver {
 		return end != null && !end.getAliveEnderDragons().isEmpty();
 	}
 
-	/** 取得する場所へプレイヤーを移す。クリエイティブにして、ドラゴンに狙われず、窒息や落下で死なないようにする。 */
+	/** クリエイティブにするのは、ドラゴンに狙われず、窒息や落下で死なないようにするため。 */
 	private static void moveToStart(MinecraftServer server) {
 		ServerPlayerEntity player = server.getPlayerManager().getPlayerList().get(0);
 		player.setGameMode(GameMode.CREATIVE);

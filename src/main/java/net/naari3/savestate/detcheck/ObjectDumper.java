@@ -52,7 +52,6 @@ public final class ObjectDumper {
 			this.lines.add(path + " = " + o);
 			return;
 		}
-		// 外側の世界 (ワールド、サーバー、チャンク、他のエンティティ) には入らない
 		if (o != this.root && (o instanceof World || o instanceof MinecraftServer || o instanceof Chunk || o instanceof Entity)) {
 			this.lines.add(path + " -> " + c.getSimpleName() + (o instanceof Entity ? " " + ((Entity) o).getUuidAsString().substring(0, 8) : ""));
 			return;

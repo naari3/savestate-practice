@@ -14,7 +14,7 @@ final class WorldFiles {
 	private WorldFiles() {
 	}
 
-	/** src 以下を dst に複製する。session.lock は除く。dst は存在しないこと。 */
+	/** dst は存在しないこと。 */
 	static void copyWorld(Path src, Path dst) throws IOException {
 		Files.walkFileTree(src, new SimpleFileVisitor<Path>() {
 			@Override

@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** クラスごとに、複製で写すインスタンスフィールドの一覧をキャッシュする。 */
 final class ClassInfo {
 	private static final Map<Class<?>, ClassInfo> CACHE = new ConcurrentHashMap<>();
 
@@ -49,7 +48,6 @@ final class ClassInfo {
 		return n.startsWith("java.") || n.startsWith("javax.") || n.startsWith("jdk.") || n.startsWith("sun.") || n.startsWith("com.sun.");
 	}
 
-	/** 状態を持たない (インスタンスフィールドがなく、JDK のクラスも継承していない)。 */
 	boolean hasNoInstanceState() {
 		return this.fields.length == 0 && this.jdkSuperclass == null;
 	}

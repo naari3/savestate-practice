@@ -41,12 +41,11 @@ import net.naari3.savestate.mixin.accessor.WorldAccessor;
 import net.naari3.savestate.rng.RngState;
 
 /**
- * インメモリ方式のスナップショット (段階 1: エンティティ + RNG + 時刻・天候 + エンティティ ID の採番)。
+ * インメモリ方式のスナップショット。
  *
- * - プレイヤー以外の全エンティティを {@link DeepCloner} で複製して保持する。スナップショット自体は生きたワールドに入れない
- * - 復元では、スナップショットをもう一度複製し (同じスナップショットから何度でも戻せるように)、今のエンティティと入れ替える
- * - entitiesById の並び (= エンティティの tick の順序) も保存時と同じにする
- * - プレイヤーは共有のまま (段階 3 で戻す)
+ * - スナップショット自体は生きたワールドに入れない。復元ではもう一度複製するので、同じスナップショットから何度でも戻せる
+ * - プレイヤーは接続に結び付いているので差し替えず、生きているオブジェクトへ書き戻す ({@link PlayerBefore})
+ * - entitiesById の並び (エンティティの tick の順序) も取得時と同じにする
  *
  * サーバースレッドの tick の合間 (server.submit のタスク) で呼ぶこと。
  */
@@ -66,11 +65,10 @@ public final class MemorySnapshot {
 		/** entitiesById の並び (複製したエンティティとプレイヤー)。 */
 		final List<Object> order = new ArrayList<>();
 		WorldChunksSnapshot chunks;
-		/** ServerWorld のスポーンの管理 (ファントム、行商人など) の複製。今のリストと同じ並び。 */
+		/** ServerWorld の spawners と同じ並び。 */
 		final List<Object> spawners = new ArrayList<>();
-		/** PersistentState (raids、map_N、idcounts など。スコアボードは除く) の複製。 */
+		/** スコアボードは除く。 */
 		final Map<String, PersistentState> states = new LinkedHashMap<>();
-		/** ドラゴン戦 (ジ・エンドのみ) の複製。 */
 		Object dragonFight;
 		int traderSpawnDelay;
 		int idleTimeout;
@@ -243,7 +241,6 @@ public final class MemorySnapshot {
 		}
 	}
 
-	/** 調査用: 段階ごとの経過時間。 */
 	private static final class PhaseTimer {
 		private final StringBuilder sb = new StringBuilder();
 		private long last = System.nanoTime();
@@ -263,7 +260,6 @@ public final class MemorySnapshot {
 		}
 	}
 
-	/** 準備段階の結果。 */
 	private static final class Prepared {
 		final Map<RegistryKey<World>, WorldChunksSnapshot.Prepared> chunks = new LinkedHashMap<>();
 		DeepCloner cloner;
@@ -272,7 +268,7 @@ public final class MemorySnapshot {
 		final List<Runnable> pendingPuts = new ArrayList<>();
 	}
 
-	/** 準備: ワールドには手を入れない。 */
+	/** ワールドには手を入れない。 */
 	private Prepared prepare(MinecraftServer server) {
 		Prepared p = new Prepared();
 		for (Map.Entry<RegistryKey<World>, WorldSnap> e : this.worlds.entrySet()) {
@@ -300,13 +296,12 @@ public final class MemorySnapshot {
 		return p;
 	}
 
-	/** 適用: ワールドを書き換える。 */
 	private void apply(MinecraftServer server, Prepared prepared) {
 		long start = System.nanoTime();
 		PlayerManager playerManager = server.getPlayerManager();
 		IdentityHashMap<Object, Entity> toFresh = prepared.toFresh;
 
-		// 0. 別のディメンションにいるプレイヤーは、先に保存時のディメンションへ移す
+		// 別のディメンションにいるプレイヤーは、PlayerBefore を取る前に取得時のディメンションへ移す
 		Map<ServerPlayerEntity, PlayerBefore> before = new IdentityHashMap<>();
 		for (Map.Entry<UUID, ServerPlayerEntity> en : this.players.entrySet()) {
 			ServerPlayerEntity live = playerManager.getPlayer(en.getKey());
@@ -328,22 +323,19 @@ public final class MemorySnapshot {
 		int[] outsideStats = new int[3];
 		for (ServerWorld world : server.getWorlds()) {
 			WorldSnap ws = this.worlds.get(world.getRegistryKey());
-			// 1. チャンク (ブロック) を先に戻す。エンティティは戻したチャンクに入れる
+			// チャンクを先に戻す。エンティティは戻したチャンクに入れる
 			if (ws != null) {
 				WorldChunksSnapshot.Prepared pc = prepared.chunks.get(world.getRegistryKey());
-				// 1a. 取得時に読み込まれていなかったチャンク、今は読み込まれていないチャンク、POI
 				int[] o = ws.chunks.restoreOutside(world, pc);
 				for (int k = 0; k < 3; k++) {
 					outsideStats[k] += o[k];
 				}
 				timer.mark(world.getRegistryKey().getValue().getPath() + " outside");
-				// 1b. 取得時に読み込まれていたチャンク
 				int[] s = ws.chunks.restore(world, pc);
 				for (int k = 0; k < 3; k++) {
 					chunkStats[k] += s[k];
 				}
 			}
-			// 2. 今のエンティティ (プレイヤー以外) を外す
 			Int2ObjectMap<Entity> byId = ((ServerWorldAccessor) world).savestate$getEntitiesById();
 			for (Entity e : new ArrayList<>(byId.values())) {
 				if (!(e instanceof ServerPlayerEntity) && !(e instanceof EnderDragonPart)) {
@@ -356,7 +348,6 @@ public final class MemorySnapshot {
 
 		SavestateDebug.maybeInjectFault();
 
-		// 3. プレイヤーとワールド全体の状態に、準備で計算した値を書き込む
 		prepared.cloner.applyDeferredWrites();
 		for (Runnable put : prepared.pendingPuts) {
 			put.run();
@@ -365,7 +356,7 @@ public final class MemorySnapshot {
 			state.markDirty();
 		}
 
-		// 4. エンティティを入れ、entitiesById の並び (tick の順序) を保存時と同じにする
+		// entitiesById の並びは tick の順序なので、取得時と同じにする
 		int restored = 0;
 		for (ServerWorld world : server.getWorlds()) {
 			WorldSnap ws = this.worlds.get(world.getRegistryKey());
@@ -411,7 +402,7 @@ public final class MemorySnapshot {
 
 		timer.mark("entities");
 
-		// 5. プレイヤーの後始末とクライアントへの同期。位置より先に、戻したブロックをクライアントへ送る
+		// プレイヤーの位置の同期より先に、戻したブロックをクライアントへ送る (flushBlockUpdates を参照)
 		for (ServerWorld world : server.getWorlds()) {
 			WorldChunksSnapshot.flushBlockUpdates(world);
 		}
@@ -420,7 +411,7 @@ public final class MemorySnapshot {
 		}
 		timer.mark("players");
 
-		// 6. 読み込み済みのチャンクの集合を取得時と同じにそろえ (取得後に読み込まれたチャンクを外し)、外れたチャンクに記録した NBT を書き戻す
+		// 読み込み済みのチャンクの集合を取得時と同じにそろえ (取得後に読み込まれたチャンクを外し)、外れたチャンクに記録した NBT を書き戻す
 		for (ServerWorld world : server.getWorlds()) {
 			WorldSnap ws = this.worlds.get(world.getRegistryKey());
 			if (ws == null) {
@@ -532,7 +523,7 @@ public final class MemorySnapshot {
 	}
 
 	private void restoreMaxEntityId(MinecraftServer server) {
-		// 保存後に作られて今も生きているエンティティ (リスポーンしたプレイヤーなど) の ID と重ならないときだけ戻す
+		// 取得後に作られて今も生きているエンティティ (リスポーンしたプレイヤーなど) の ID と重ならないときだけ戻す
 		int maxLive = 0;
 		for (ServerWorld world : server.getWorlds()) {
 			for (Entity e : world.iterateEntities()) {

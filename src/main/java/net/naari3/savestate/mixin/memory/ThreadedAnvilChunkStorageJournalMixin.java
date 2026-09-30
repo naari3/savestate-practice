@@ -11,7 +11,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/** チャンクがディスクへ保存されたことを記録する。 */
 @Mixin(ThreadedAnvilChunkStorage.class)
 public abstract class ThreadedAnvilChunkStorageJournalMixin {
 	@Shadow
