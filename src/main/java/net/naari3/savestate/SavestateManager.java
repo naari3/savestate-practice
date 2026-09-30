@@ -35,8 +35,8 @@ public final class SavestateManager {
 	private static final String RNG_FILE = "savestate-practice-rng.dat";
 	/** 改名前 (mcsr-savestate) に保存したスロットの RNG ファイル。 */
 	private static final String LEGACY_RNG_FILE = "mcsr-savestate-rng.dat";
-	/** 方式 (インメモリ / ディスク) は SavestateConfig.memoryMode() で決まる。スロットは 1 から MAX_SLOTS まで。 */
-	private static final MemorySnapshot[] memorySlots = new MemorySnapshot[SavestateConfig.MAX_SLOTS + 1];
+	/** 方式 (インメモリ / ディスク) は Settings.memoryMode() で決まる。スロットは 1 から MAX_SLOTS まで。 */
+	private static final MemorySnapshot[] memorySlots = new MemorySnapshot[Settings.MAX_SLOTS + 1];
 	/** memorySlots を取ったサーバー。別のワールドを開いたら (サーバーが変わったら) 使わない。 */
 	private static IntegratedServer memorySlotServer;
 	/** 直前の load の取り消し用 (load する直前の状態)。 */
@@ -79,7 +79,7 @@ public final class SavestateManager {
 			if (inWorld) load(client);
 		}
 		while (SavestateKeys.UNDO.wasPressed()) {
-			if (inWorld && SavestateConfig.memoryMode()) undoLoad(client);
+			if (inWorld && Settings.memoryMode()) undoLoad(client);
 		}
 
 		DetCheckDriver.onClientTick(client);
@@ -87,9 +87,9 @@ public final class SavestateManager {
 
 	private static void changeSlot(MinecraftClient client, int delta) {
 		// スロット数を設定で減らした後は、範囲外のスロットから範囲内に戻す
-		currentSlot = Math.floorMod(Math.min(currentSlot, SavestateConfig.slotCount()) - 1 + delta, SavestateConfig.slotCount()) + 1;
+		currentSlot = Math.floorMod(Math.min(currentSlot, Settings.slotCount()) - 1 + delta, Settings.slotCount()) + 1;
 		IntegratedServer server = client.getServer();
-		boolean exists = SavestateConfig.memoryMode()
+		boolean exists = Settings.memoryMode()
 			? memorySlotServer == server && memorySlots[currentSlot] != null
 			: server != null && Files.isDirectory(slotDir(worldDirName(server), currentSlot));
 		overlay(client, "Slot " + currentSlot + (exists ? "" : " (empty)"));
@@ -101,7 +101,7 @@ public final class SavestateManager {
 
 	/** onSuccess はクライアントスレッドで呼ばれる。 */
 	public static void saveSlot(MinecraftClient client, int slot, Runnable onSuccess) {
-		if (SavestateConfig.memoryMode()) {
+		if (Settings.memoryMode()) {
 			saveMemory(client, slot, onSuccess);
 		} else {
 			saveDisk(client, slot, onSuccess);
@@ -282,7 +282,7 @@ public final class SavestateManager {
 
 	/** load を開始できたら true。 */
 	public static boolean loadSlot(MinecraftClient client, int slot) {
-		return SavestateConfig.memoryMode() ? loadMemory(client, slot) : loadDisk(client, slot);
+		return Settings.memoryMode() ? loadMemory(client, slot) : loadDisk(client, slot);
 	}
 
 	private static boolean loadDisk(MinecraftClient client, int slot) {

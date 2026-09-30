@@ -3,7 +3,7 @@
 	"id": "savestate-practice",
 	"version": "${version}",
 	"name": "Savestate Practice",
-	"description": "Savestate / loadstate for Minecraft 1.16.1 speedrun practice. Uses SpeedrunAPI instead of Fabric API.",
+	"description": "Savestate / loadstate for Minecraft 1.16.1 speedrun practice. No Fabric API. SpeedrunAPI is optional (settings screen).",
 	"authors": [
 		"naari3"
 	],
@@ -24,7 +24,12 @@
 	],
 	"depends": {
 		"fabricloader": ">=0.16.0",
-		"minecraft": "1.16.1",
+		"minecraft": "1.16.1"
+	},
+	"suggests": {
 		"speedrunapi": ">=2.2"
+	},
+	"breaks": {
+		"speedrunapi": "<2.2"
 	}
 }

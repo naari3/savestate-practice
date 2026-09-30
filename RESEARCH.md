@@ -578,3 +578,19 @@
 - rename_memory.log (インメモリ方式、block、100 tick × 2): 全項目一致
 - rename_disk.log (ディスク方式、block): tick 1 から 74 項目ずれた (チャンクの読み込み状況とエンティティ)
 - ctl_disk.log (改名前のコミット c8bc21b、ディスク方式、同じ条件): tick 1 から同じ種類のずれ (同じチャンク -14,13 の読み込みの差) → 改名とは無関係。ディスク方式は、チャンクを比べる検査を入れてから確認していなかった。ワールドを開き直したときの非同期のチャンク読み込みの差と思われる (未調査)
+
+## 2026-09-30 SpeedrunAPI への依存を任意にする (ユーザーの指示)
+
+### 変更
+- fabric.mod.json: `depends` から外し、`suggests` (>=2.2) と `breaks` (<2.2) にした
+- 設定: 窓口を `Settings` にした。SpeedrunAPI があれば `SavestateConfig` (設定画面) の値、なければ config/mcsr/savestate-practice.json を起動時に一度だけ読む (なければ既定値)。SpeedrunAPI のクラスは `compat.SpeedrunApiCompat` 経由でしか参照しない
+- キー: key-binding-api があれば `compat.KeyBindingApiCompat` で登録、なければ代わりの Mixin (`mixin.fallback.GameOptionsKeysMixin` と `KeyBindingCategoryAccessor`) で keysAll とカテゴリの並び順に加える
+- lang: SpeedrunAPI も fabric-resource-loader もないときは、`mixin.fallback.DefaultClientResourcePackMixin` で既定のリソースパックに名前空間を加える。既定のリソースパックはクラスローダーからリソースを探すので、名前空間を加えるだけで MOD の jar 内の lang も見つかる
+- 代わりの Mixin は `SavestateMixinPlugin` で条件付きで適用する
+- ビルド: `-PnoSpeedrunApi` で SpeedrunAPI をコンパイルにだけ使い、runClient には入れない (ないときの確認用)
+
+### 観察
+- opt_with.log (SpeedrunAPI あり): 読み込まれる MOD 8 個。キーが keysAll に入り、翻訳は「Save state」。検査 (block、100 tick × 2) は tick 93 から、x=-395 付近のアイテム 1 個の位置・速度だけずれた (プレイヤーから遠い。チャンクの読み込みの差と思われる、未調査)
+- opt_with2.log (SpeedrunAPI あり、再実行、100 tick × 3): 全項目一致
+- opt_without.log (SpeedrunAPI なし): 読み込まれる MOD 5 個 (speedrunapi、key-binding-api なし)。設定ファイルを読み、キーが keysAll に入り、翻訳は「Save state」。検査 (block、100 tick × 2) は全項目一致
+- SpeedrunAPI なしでの設定画面・操作設定画面の見た目は確認していない

@@ -59,9 +59,14 @@ dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
 	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-	// 設定画面、キー登録 (key-binding-api を同梱)、MOD の lang の読み込み
+	// 任意の依存: 設定画面、キー登録 (key-binding-api を同梱)、MOD の lang の読み込み。なくても動く (Settings、mixin.fallback)
 	// 最新版は https://jitpack.io/#contariaa/speedrunapi で確認する
-	modImplementation "com.github.contariaa:SpeedrunAPI:${project.speedrunapi_version}"
+	// -PnoSpeedrunApi を付けると、コンパイルにだけ使い、runClient には入れない (ないときの動作の確認用)
+	if (project.hasProperty("noSpeedrunApi")) {
+		modCompileOnly "com.github.contariaa:SpeedrunAPI:${project.speedrunapi_version}"
+	} else {
+		modImplementation "com.github.contariaa:SpeedrunAPI:${project.speedrunapi_version}"
+	}
 }
 
 processResources {

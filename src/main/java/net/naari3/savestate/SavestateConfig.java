@@ -22,20 +22,18 @@ import org.lwjgl.glfw.GLFW;
 /**
  * SpeedrunAPI の設定 (config/mcsr/savestate-practice.json、設定画面は Options の SpeedrunAPI の MOD 一覧から開く)。
  * fabric.mod.json の custom.speedrunapi.config で登録し、SpeedrunAPI がインスタンスを作る。
+ * SpeedrunAPI があるときだけ読み込まれる。他のクラスからは Settings と compat.SpeedrunApiCompat を通して使う。
  */
 @SuppressWarnings("FieldMayBeFinal")
 public class SavestateConfig implements SpeedrunConfig {
-	/** スロット数の上限 (スナップショットの配列の大きさ)。 */
-	public static final int MAX_SLOTS = 9;
-
 	private static SavestateConfig instance;
 
 	/** memory: インメモリ方式 (既定)。disk: ワールドのフォルダを複製して開き直す方式。 */
-	public Mode mode = Mode.MEMORY;
+	public Settings.Mode mode = Settings.DEFAULT_MODE;
 
 	/** Next / Previous slot で切り替えるスロットの数。 */
-	@Config.Numbers.Whole.Bounds(min = 1, max = MAX_SLOTS)
-	public int slotCount = MAX_SLOTS;
+	@Config.Numbers.Whole.Bounds(min = 1, max = Settings.MAX_SLOTS)
+	public int slotCount = Settings.DEFAULT_SLOT_COUNT;
 
 	// キー割り当て。設定画面に並べるための項目で、値はここには持たない (vanilla の操作設定と同じく options.txt に保存する)。
 	// 設定ファイルには null として書かれるが、読み込みでは無視する
@@ -66,19 +64,6 @@ public class SavestateConfig implements SpeedrunConfig {
 	public static SavestateConfig get() {
 		// SpeedrunAPI が作る前に呼ばれた場合は既定値のインスタンスを作る (作ったものが instance になる)
 		return instance != null ? instance : new SavestateConfig();
-	}
-
-	/** インメモリ方式か。-Dsavestate-practice.mode=memory|disk があればそちらを優先する (検査用)。 */
-	public static boolean memoryMode() {
-		String override = System.getProperty("savestate-practice.mode");
-		if (override != null) {
-			return !"disk".equals(override);
-		}
-		return get().mode == Mode.MEMORY;
-	}
-
-	public static int slotCount() {
-		return Math.max(1, Math.min(MAX_SLOTS, get().slotCount));
 	}
 
 	@Override
@@ -171,8 +156,4 @@ public class SavestateConfig implements SpeedrunConfig {
 		return false;
 	}
 
-	public enum Mode {
-		MEMORY,
-		DISK
-	}
 }

@@ -1,10 +1,17 @@
 package net.naari3.savestate;
 
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import java.util.Collections;
+import java.util.Map;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.options.KeyBinding;
+import net.naari3.savestate.compat.KeyBindingApiCompat;
+import net.naari3.savestate.mixin.fallback.KeyBindingCategoryAccessor;
 import org.lwjgl.glfw.GLFW;
 
-/** キー割り当て。SpeedrunAPI が同梱する key-binding-api で登録する (表示名は assets/savestate-practice/lang)。 */
+/**
+ * キー割り当て (表示名は assets/savestate-practice/lang)。
+ * key-binding-api (SpeedrunAPI が同梱) があればそれで登録し、なければ代わりの Mixin (mixin.fallback.GameOptionsKeysMixin) で加える。
+ */
 public final class SavestateKeys {
 	public static final String CATEGORY = "key.categories.savestate-practice";
 
@@ -30,8 +37,14 @@ public final class SavestateKeys {
 
 	/** onInitializeClient から呼ぶ (options.txt が読まれる前)。 */
 	static void register() {
-		for (KeyBinding binding : all()) {
-			KeyBindingHelper.registerKeyBinding(binding);
+		if (FabricLoader.getInstance().isModLoaded("fabric-key-binding-api-v1")) {
+			KeyBindingApiCompat.register(all());
+			return;
+		}
+		// 未登録のカテゴリだと、操作設定の画面の並べ替えで NPE になるので末尾に登録する (キー自体は GameOptionsKeysMixin が加える)
+		Map<String, Integer> order = KeyBindingCategoryAccessor.savestate$getCategoryOrderMap();
+		if (!order.containsKey(CATEGORY)) {
+			order.put(CATEGORY, order.isEmpty() ? 1 : Collections.max(order.values()) + 1);
 		}
 	}
 }
