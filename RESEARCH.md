@@ -521,3 +521,15 @@
 - キーが `GameOptions.keysAll` に入っている。ワールドに入った後、翻訳キーが「Save state」に解決される (最初の tick はリソースの読み込み前で、未解決だった)
 - far、100 tick × 2: 全項目一致
 - 設定画面の見た目は確認していない
+
+## 2026-09-30 キー設定を SpeedrunAPI の設定画面に載せる、保存・読み込み開始時の表示
+
+### 変更
+- キー設定: StandardSettings と同じ形にした。設定画面の「Key Bindings」カテゴリに、キーごとのボタンを並べる。ボタンを押した後の入力を `SpeedrunConfig#createInputListener()` で受け取って割り当てる (Esc は解除、他の操作と重なると赤表示)
+  - 割り当ての保存先は vanilla と同じ options.txt (`GameOptions#setKeyCode`)。設定ファイルの `saveKey` などは画面に並べるための項目で、null が書かれるが読み込みでは無視する
+  - 逸脱: 最初は seedqueue のように専用のキー設定画面を作ったが、ユーザーの指摘で StandardSettings の方式に変えた。seedqueue の専用画面は、複数キーの組み合わせを扱う独自のキー割り当てのためのもので、vanilla の KeyBinding には不要だった
+- 保存・読み込みの開始時にもアクションバーに表示する (「Saving slot N...」「Loading slot N...」)
+
+### 観察
+- sapi4.log (20 tick × 2、かき乱しなし): プレイヤーの向きだけが tick 2 からずれた。向きはクライアントのマウス入力で変わる既知の制限と思われる
+- ユーザーの手動確認: 「たまにベロシティ周辺で怪しい動きを見せる」。言語化・再現ともに不十分なので、いったん保留 (未調査)

@@ -11,5 +11,6 @@
 	"speedrunapi.config.mcsr-savestate.option.mode.value.MEMORY": "メモリ",
 	"speedrunapi.config.mcsr-savestate.option.mode.value.DISK": "ディスク",
 	"speedrunapi.config.mcsr-savestate.option.slotCount": "スロット数",
-	"speedrunapi.config.mcsr-savestate.option.slotCount.description": "次のスロット / 前のスロットで切り替えるスロットの数。"
+	"speedrunapi.config.mcsr-savestate.option.slotCount.description": "次のスロット / 前のスロットで切り替えるスロットの数。",
+	"speedrunapi.config.mcsr-savestate.category.keys": "キー設定"
 }

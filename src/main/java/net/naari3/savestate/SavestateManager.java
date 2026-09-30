@@ -112,6 +112,7 @@ public final class SavestateManager {
 			return;
 		}
 		busy = true;
+		overlay(client, "Saving slot " + slot + "...");
 		long start = System.nanoTime();
 		server.submit(() -> MemorySnapshot.capture(server)).whenComplete((snap, t) -> client.execute(() -> {
 			busy = false;
@@ -176,6 +177,7 @@ public final class SavestateManager {
 	 */
 	private static void restoreMemory(MinecraftClient client, IntegratedServer server, MemorySnapshot snap, String label) {
 		busy = true;
+		overlay(client, "Loading " + label + "...");
 		long start = System.nanoTime();
 		server.submit(() -> {
 			MemorySnapshot undo = snap.restore(server, true);
@@ -294,6 +296,7 @@ public final class SavestateManager {
 			return false;
 		}
 		busy = true;
+		overlay(client, "Loading slot " + slot + "...");
 		// tick の途中でワールドを閉じないよう、タスクキューに積んで tick の外で実行する
 		client.send(() -> loadOutsideTick(client, dirName, worldDir, slot, src));
 		return true;

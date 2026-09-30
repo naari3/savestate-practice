@@ -11,5 +11,6 @@
 	"speedrunapi.config.mcsr-savestate.option.mode.value.MEMORY": "Memory",
 	"speedrunapi.config.mcsr-savestate.option.mode.value.DISK": "Disk",
 	"speedrunapi.config.mcsr-savestate.option.slotCount": "Slots",
-	"speedrunapi.config.mcsr-savestate.option.slotCount.description": "Number of slots to cycle through with Next / Previous slot."
+	"speedrunapi.config.mcsr-savestate.option.slotCount.description": "Number of slots to cycle through with Next / Previous slot.",
+	"speedrunapi.config.mcsr-savestate.category.keys": "Key Bindings"
 }

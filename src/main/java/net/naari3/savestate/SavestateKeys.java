@@ -22,15 +22,16 @@ public final class SavestateKeys {
 	private SavestateKeys() {
 	}
 
+	public static KeyBinding[] all() {
+		return DETCHECK != null
+			? new KeyBinding[] { SAVE, LOAD, NEXT_SLOT, PREV_SLOT, UNDO, DETCHECK }
+			: new KeyBinding[] { SAVE, LOAD, NEXT_SLOT, PREV_SLOT, UNDO };
+	}
+
 	/** onInitializeClient から呼ぶ (options.txt が読まれる前)。 */
 	static void register() {
-		KeyBindingHelper.registerKeyBinding(SAVE);
-		KeyBindingHelper.registerKeyBinding(LOAD);
-		KeyBindingHelper.registerKeyBinding(NEXT_SLOT);
-		KeyBindingHelper.registerKeyBinding(PREV_SLOT);
-		KeyBindingHelper.registerKeyBinding(UNDO);
-		if (DETCHECK != null) {
-			KeyBindingHelper.registerKeyBinding(DETCHECK);
+		for (KeyBinding binding : all()) {
+			KeyBindingHelper.registerKeyBinding(binding);
 		}
 	}
 }
