@@ -16,6 +16,9 @@ public interface ThreadedAnvilChunkStorageAccess {
 	/** 読み込みを外す処理が残っているか (外す予定、外している途中、外す処理のタスク)。 */
 	boolean savestate$unloadPending();
 
+	/** プレイヤーの周りに読み込むチャンクの距離 (描画距離 + 1)。 */
+	int savestate$watchDistance();
+
 	/** currentChunkHolders の挿入順。 */
 	long[] savestate$holderOrder();
 

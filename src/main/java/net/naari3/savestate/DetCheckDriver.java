@@ -54,7 +54,7 @@ public final class DetCheckDriver {
 	 * 移動する種類では、DISTURB_FAR_TICKS 待って元のチャンクの読み込みを外させ (ディスクに書かせ) てから移動先を変更する。
 	 */
 	private static final String DISTURB = System.getProperty("savestate-practice.detcheck.disturb");
-	/** 取得する場所 (overworld / nether / end)。null ならワールドを開いた場所のまま。 */
+	/** 取得する場所 (overworld / nether / end、warp は遠くへ移った直後)。null ならワールドを開いた場所のまま。 */
 	private static final String START = System.getProperty("savestate-practice.detcheck.start");
 	private static boolean movedToStart;
 	/** 飛ばしてから元のチャンクの読み込みが外れて保存されるまで待つ tick 数。 */
@@ -117,7 +117,10 @@ public final class DetCheckDriver {
 				}
 				if (++settle >= SETTLE_TICKS && stableTicks >= STABLE_TICKS) {
 					SavestateMod.LOGGER.info("[DetCheck] chunks settled at {} after {} ticks", chunks, settle);
-					if (START != null && !movedToStart) {
+					if ("warp".equals(START)) {
+						// 練習マップのワープと同じく、遠くへ移った直後 (周りのチャンクを読み込んでいる最中) に保存する
+						client.getServer().execute(() -> warp(client.getServer()));
+					} else if (START != null && !movedToStart) {
 						movedToStart = true;
 						client.getServer().execute(() -> moveToStart(client.getServer()));
 						settle = 0;
@@ -170,6 +173,11 @@ public final class DetCheckDriver {
 		server.execute(() -> {
 			ServerPlayerEntity player = server.getPlayerManager().getPlayerList().get(0);
 			ServerWorld world = player.getServerWorld();
+			// どの種類でも、スコアボードと /schedule の予約一覧を変える (データパックの状態に当たる)
+			server.getCommandManager().execute(server.getCommandSource().withSilent(), "scoreboard objectives add savestate_dc dummy");
+			server.getCommandManager().execute(server.getCommandSource().withSilent(), "scoreboard players add disturbed savestate_dc 1");
+			server.getSaveProperties().getMainWorldProperties().getScheduledEvents().setEvent("savestate-practice:detcheck",
+				world.getTime() + 100000, new net.minecraft.world.timer.FunctionTimerCallback(new net.minecraft.util.Identifier("savestate-practice", "none")));
 			if ("block".equals(DISTURB)) {
 				BlockPos feet = player.getBlockPos();
 				for (int dx = -1; dx <= 1; dx++) {
@@ -259,6 +267,15 @@ public final class DetCheckDriver {
 	}
 
 	/** クリエイティブにするのは、ドラゴンに狙われず、窒息や落下で死なないようにするため。 */
+	private static void warp(MinecraftServer server) {
+		ServerPlayerEntity player = server.getPlayerManager().getPlayerList().get(0);
+		player.setGameMode(GameMode.CREATIVE);
+		player.abilities.flying = true;
+		player.sendAbilitiesUpdate();
+		player.teleport(player.getServerWorld(), player.getX() + 3000, 120, player.getZ(), player.yaw, player.pitch);
+		SavestateMod.LOGGER.info("[DetCheck] warped player to {} right before saving", player.getBlockPos());
+	}
+
 	private static void moveToStart(MinecraftServer server) {
 		ServerPlayerEntity player = server.getPlayerManager().getPlayerList().get(0);
 		player.setGameMode(GameMode.CREATIVE);

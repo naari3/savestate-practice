@@ -456,6 +456,79 @@ final class WorldChunksSnapshot {
 		}
 	}
 
+	/** 取得の前に、チャンクの読み込みが落ち着くのを待つ時間の上限 (ワープ先の地形の生成を含むことがある)。 */
+	private static final long LOAD_WAIT_MAX_NANOS = 10_000_000_000L;
+
+	/**
+	 * 取得の前に呼ぶ。チャンクの読み込みが落ち着くまで、メインスレッドのタスクと読み込みを外す処理を回して待つ (ワールドは進めない)。
+	 * 落ち着いた = プレイヤーの周り (描画距離 + 1) がすべて読み込み済みで、読み込みレベルが FULL 以上なのに読み込まれていない
+	 * チャンクがなく、外す途中のチャンクもない。
+	 * 読み込みの途中で取得すると、復元時にプレイヤーのチケットが取得時になかったチャンクを読み込ませ、集合がそろわない
+	 * (例: ワープの直後に保存したとき)。ワープの直後はプレイヤーのチケットもまだ付いていない (throttler 経由で後から届く) ので、
+	 * チケットからではなくプレイヤーの位置から、読み込まれているべきチャンクを決める。
+	 */
+	static void awaitChunkLoads(ServerWorld world) {
+		ServerChunkManager chunkManager = world.getChunkManager();
+		ThreadedAnvilChunkStorageAccess tacs = (ThreadedAnvilChunkStorageAccess) chunkManager.threadedAnvilChunkStorage;
+		// プレイヤーの位置の変化をチケットに反映する (通常は次の tick で行われる)。ワープの直後はまだ反映されていないことがある
+		for (net.minecraft.server.network.ServerPlayerEntity player : world.getPlayers()) {
+			chunkManager.updateCameraPosition(player);
+		}
+		long begin = System.nanoTime();
+		int[] state = new int[3];
+		while (true) {
+			chunkLoadState(world, tacs, state);
+			if (state[0] == 0 && state[1] == 0 && state[2] == 0 && !tacs.savestate$unloadPending()) {
+				return;
+			}
+			if (System.nanoTime() - begin >= LOAD_WAIT_MAX_NANOS) {
+				SavestateMod.LOGGER.warn("[memory] {}: saved while chunks were still loading ({} around players not loaded, {} pending, {} waiting to unload)",
+					world.getRegistryKey().getValue(), state[0], state[1], state[2]);
+				return;
+			}
+			((ServerChunkManagerInvoker) chunkManager).savestate$updateTickets();
+			tacs.savestate$unloadTick();
+			int tasks = 0;
+			while (chunkManager.executeQueuedTasks()) {
+				tasks++;
+			}
+			((ServerChunkManagerInvoker) chunkManager).savestate$updateTickets();
+			if (tasks == 0) {
+				LockSupport.parkNanos("savestate-practice: waiting for chunk loads", WAIT_STEP_NANOS);
+			}
+		}
+	}
+
+	/** state に {プレイヤーの周りで読み込まれていない数, レベルは FULL 以上なのに読み込まれていない数, 読み込まれているがレベルが FULL 未満 (外れる予定) の数} を入れる。 */
+	private static void chunkLoadState(ServerWorld world, ThreadedAnvilChunkStorageAccess tacs, int[] state) {
+		state[0] = 0;
+		state[1] = 0;
+		state[2] = 0;
+		int r = tacs.savestate$watchDistance();
+		boolean spectatorsLoad = world.getGameRules().getBoolean(net.minecraft.world.GameRules.SPECTATORS_GENERATE_CHUNKS);
+		for (net.minecraft.server.network.ServerPlayerEntity player : world.getPlayers()) {
+			if (player.isSpectator() && !spectatorsLoad) {
+				continue;
+			}
+			ChunkPos c = new ChunkPos(player.getBlockPos());
+			for (int dx = -r; dx <= r; dx++) {
+				for (int dz = -r; dz <= r; dz++) {
+					if (world.getChunk(c.x + dx, c.z + dz, ChunkStatus.FULL, false) == null) {
+						state[0]++;
+					}
+				}
+			}
+		}
+		for (ChunkHolder holder : tacs.savestate$chunkHolders()) {
+			boolean full = fullChunk(holder) != null;
+			if (holder.getLevel() <= 33 && !full) {
+				state[1]++;
+			} else if (holder.getLevel() > 33 && full) {
+				state[2]++;
+			}
+		}
+	}
+
 	/** 復元が途中で失敗したときに、付けたままの復元用のチケットを外す。 */
 	void releaseRestoreTickets(ServerWorld world) {
 		ServerChunkManager chunkManager = world.getChunkManager();

@@ -17,6 +17,7 @@
 		"accessor.ServerPlayerEntityAccessor",
 		"accessor.ServerWorldAccessor",
 		"accessor.ThreadedAnvilChunkStorageInvoker",
+		"accessor.TimerAccessor",
 		"accessor.WanderingTraderManagerAccessor",
 		"accessor.WorldAccessor",
 		"accessor.WorldChunkAccessor",

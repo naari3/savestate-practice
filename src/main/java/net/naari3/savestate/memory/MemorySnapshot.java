@@ -64,6 +64,7 @@ public final class MemorySnapshot {
 	private final CompoundTag rng;
 	private final int maxEntityId;
 	private final long scheduledTickIdCounter;
+	private ServerGlobalState global;
 
 	private static final class WorldSnap {
 		/** entitiesById の並び (複製したエンティティとプレイヤー)。 */
@@ -71,7 +72,7 @@ public final class MemorySnapshot {
 		WorldChunksSnapshot chunks;
 		/** ServerWorld の spawners と同じ並び。 */
 		final List<Object> spawners = new ArrayList<>();
-		/** スコアボードは除く。 */
+		/** スコアボードは除く (ServerGlobalState で扱う)。 */
 		final Map<String, PersistentState> states = new LinkedHashMap<>();
 		Object dragonFight;
 		int traderSpawnDelay;
@@ -110,8 +111,18 @@ public final class MemorySnapshot {
 		return chunkPolicy;
 	}
 
-	public static MemorySnapshot capture(MinecraftServer server) {
+	/**
+	 * @param waitForChunkLoads チャンクの読み込みが落ち着くまで待ってから取る (スロットへの保存)。
+	 *                          取り消し用 (復元の直前の状態) は待たずにすぐ取る
+	 */
+	public static MemorySnapshot capture(MinecraftServer server, boolean waitForChunkLoads) {
 		long start = System.nanoTime();
+		if (waitForChunkLoads) {
+			for (ServerWorld world : server.getWorlds()) {
+				WorldChunksSnapshot.awaitChunkLoads(world);
+			}
+		}
+		long loadWait = (System.nanoTime() - start) / 1_000_000L;
 		MemorySnapshot snap = new MemorySnapshot(RngState.capture(server), EntityAccessor.savestate$getMaxEntityId().get(),
 			ScheduledTickAccessor.savestate$getIdCounter());
 		List<Entity> originals = new ArrayList<>();
@@ -175,14 +186,15 @@ public final class MemorySnapshot {
 			// ここから先の、読み込み済みチャンク以外への変化を記録し始める
 			ws.chunks.activateJournal();
 		}
+		snap.global = ServerGlobalState.capture(server);
 
 		long ms = (System.nanoTime() - start) / 1_000_000L;
 		int chunkCount = 0;
 		for (WorldSnap ws : snap.worlds.values()) {
 			chunkCount += ws.chunks.chunkCount();
 		}
-		SavestateMod.LOGGER.info("[memory] captured {} entities, {} players, {} chunks in {} ms ({} entities in chunks being unloaded were skipped)",
-			snap.roots.size(), snap.players.size(), chunkCount, ms, skipped);
+		SavestateMod.LOGGER.info("[memory] captured {} entities, {} players, {} chunks in {} ms (waited {} ms for chunk loads, {} entities in chunks being unloaded were skipped)",
+			snap.roots.size(), snap.players.size(), chunkCount, ms, loadWait, skipped);
 		if (SavestateDebug.ENABLED) {
 			logCounts("capture", cloner.getClonedCounts());
 		}
@@ -202,7 +214,7 @@ public final class MemorySnapshot {
 		long t0 = System.nanoTime();
 		Prepared prepared = this.prepare(server);
 		long t1 = System.nanoTime();
-		MemorySnapshot undo = makeUndo ? capture(server) : null;
+		MemorySnapshot undo = makeUndo ? capture(server, false) : null;
 		SavestateDebug.log("restore timing: prepare {} ms, undo capture {} ms", (t1 - t0) / 1_000_000L, (System.nanoTime() - t1) / 1_000_000L);
 		// 調査用: 故障の注入を有効にしているときは、ロールバックで元に戻ったかを比べるため、今の状態の要約を取っておく
 		Map<String, String> stateBefore = makeUndo && SavestateDebug.faultInjectionEnabled() ? DetCheck.describe(server) : null;
@@ -374,6 +386,7 @@ public final class MemorySnapshot {
 				syncForcedChunkTickets(world, ws, forcedBefore.get(world.getRegistryKey()));
 			}
 		}
+		this.global.restore(server);
 
 		// entitiesById の並びは tick の順序なので、取得時と同じにする
 		int restored = 0;

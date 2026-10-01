@@ -135,6 +135,8 @@ public final class DetCheck {
 		}
 		Map<String, String> m = new TreeMap<>();
 		RngState.describeInto(m);
+		m.put("server scoreboard", Integer.toHexString(net.naari3.savestate.memory.ServerGlobalState.describeScoreboard(server).hashCode()));
+		m.put("server scheduled", net.naari3.savestate.memory.ServerGlobalState.describeScheduledEvents(server));
 		for (ServerWorld world : server.getWorlds()) {
 			String w = world.getRegistryKey().getValue().getPath();
 			m.put("world " + w + " time", Long.toString(world.getTime()));

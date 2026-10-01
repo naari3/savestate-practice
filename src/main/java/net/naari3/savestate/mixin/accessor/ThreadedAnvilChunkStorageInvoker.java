@@ -51,6 +51,14 @@ public abstract class ThreadedAnvilChunkStorageInvoker implements ThreadedAnvilC
 	@Shadow
 	private boolean chunkHolderListDirty;
 
+	@Shadow
+	private int watchDistance;
+
+	@Override
+	public int savestate$watchDistance() {
+		return this.watchDistance;
+	}
+
 	@Override
 	public long[] savestate$holderOrder() {
 		return this.currentChunkHolders.keySet().toLongArray();

@@ -29,7 +29,7 @@ loom {
 			if (project.hasProperty("detcheckDisturb")) {
 				vmArg "-Dsavestate-practice.detcheck.disturb=${project.property('detcheckDisturb') ?: 'far'}"
 			}
-			// 取得する場所: -PdetcheckStart=overworld|nether|end
+			// 取得する場所: -PdetcheckStart=overworld|nether|end|warp
 			if (project.hasProperty("detcheckStart")) {
 				vmArg "-Dsavestate-practice.detcheck.start=${project.property('detcheckStart')}"
 			}

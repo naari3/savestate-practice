@@ -108,7 +108,7 @@ public final class SavestateManager {
 		busy = true;
 		overlay(client, "Saving slot " + slot + "...");
 		long start = System.nanoTime();
-		server.submit(() -> MemorySnapshot.capture(server)).whenComplete((snap, t) -> client.execute(() -> {
+		server.submit(() -> MemorySnapshot.capture(server, true)).whenComplete((snap, t) -> client.execute(() -> {
 			busy = false;
 			if (t != null) {
 				SavestateMod.LOGGER.error("Failed to save state to memory slot {}", slot, t);
