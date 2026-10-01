@@ -7,7 +7,9 @@ import net.minecraft.network.packet.s2c.play.CloseScreenS2CPacket;
 import net.minecraft.network.packet.s2c.play.EntityStatusEffectS2CPacket;
 import net.minecraft.network.packet.s2c.play.EntityTrackerUpdateS2CPacket;
 import net.minecraft.network.packet.s2c.play.EntityVelocityUpdateS2CPacket;
+import net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket;
 import net.minecraft.network.packet.s2c.play.HeldItemChangeS2CPacket;
+import net.minecraft.network.packet.s2c.play.PlayerListS2CPacket;
 import net.minecraft.network.packet.s2c.play.RemoveEntityStatusEffectS2CPacket;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -64,7 +66,8 @@ final class PlayerBefore {
 		player.setCameraPosition(this.cameraPosition);
 		world.getChunkManager().updateCameraPosition(player);
 
-		// 取得時にクライアントへ送る予定だったエンティティ削除は、今のクライアントには関係ない
+		// 書き戻しで取得時の一覧になっている。取得時にクライアントへ送る予定だった削除は、今のクライアントには関係ない
+		// (今回外したものの削除は MemorySnapshot.apply で先に送ってある)
 		((ServerPlayerEntityAccessor) player).savestate$getRemovedEntities().clear();
 
 		// スナップショットで開いていた画面 (チェストなど) は再現せず、インベントリに戻す
@@ -83,6 +86,15 @@ final class PlayerBefore {
 
 		player.onHandlerRegistered(player.playerScreenHandler, player.playerScreenHandler.getStacks());
 		player.networkHandler.sendPacket(new HeldItemChangeS2CPacket(player.inventory.selectedSlot));
+		// ゲームモードはサーバー側だけ取得時に戻っている。クライアントに知らせないと、クライアントは今のモードのまま食い違い、
+		// /gamemode で取得時と同じモードにしようとしても「変わらない」扱いになって直せない。
+		// クライアントはゲームモードを受け取ると能力を既定に上書きするので、能力の送り直しより先に送る
+		net.minecraft.world.GameMode mode = player.interactionManager.getGameMode();
+		player.networkHandler.sendPacket(new GameStateChangeS2CPacket(GameStateChangeS2CPacket.GAME_MODE_CHANGED, mode.getId()));
+		player.server.getPlayerManager().sendToAll(new PlayerListS2CPacket(PlayerListS2CPacket.Action.UPDATE_GAME_MODE, player));
+		if (mode != net.minecraft.world.GameMode.SPECTATOR && player.getCameraEntity() != player) {
+			player.setCameraEntity(player);
+		}
 		player.sendAbilitiesUpdate();
 
 		for (StatusEffectInstance e : this.effects) {

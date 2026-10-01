@@ -20,6 +20,8 @@ import net.minecraft.entity.boss.dragon.EnderDragonPart;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.scoreboard.ScoreboardState;
 import net.minecraft.server.MinecraftServer;
+import net.naari3.savestate.mixin.accessor.ServerPlayerEntityAccessor;
+import net.minecraft.network.packet.s2c.play.EntitiesDestroyS2CPacket;
 import net.minecraft.server.PlayerManager;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -369,6 +371,20 @@ public final class MemorySnapshot {
 			}
 			byId.values().removeIf(e -> e instanceof EnderDragonPart);
 			timer.mark(world.getRegistryKey().getValue().getPath() + " chunks+remove");
+		}
+		// 外したエンティティの削除は、通常はプレイヤーの次の tick でまとめてクライアントへ送られる (removedEntities)。
+		// この後、取得時のエンティティを同じ ID で入れ直し、その出現はすぐ送られるので、削除が後から届くと入れ直したものまで消える。
+		// 送らずに捨てると、取得後に生まれたもの (落ちたアイテムなど) がクライアントにだけ残る。ここで先に送る
+		for (ServerPlayerEntity player : playerManager.getPlayerList()) {
+			List<Integer> removed = ((ServerPlayerEntityAccessor) player).savestate$getRemovedEntities();
+			if (!removed.isEmpty()) {
+				int[] ids = new int[removed.size()];
+				for (int i = 0; i < ids.length; i++) {
+					ids[i] = removed.get(i);
+				}
+				player.networkHandler.sendPacket(new EntitiesDestroyS2CPacket(ids));
+				removed.clear();
+			}
 		}
 
 		SavestateDebug.maybeInjectFault();

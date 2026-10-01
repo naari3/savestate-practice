@@ -51,7 +51,36 @@ public final class SavestateManager {
 	private SavestateManager() {
 	}
 
+	/** 調査用: load の後、この tick 数がたったら、クライアントにだけ残っているエンティティを数える。 */
+	private static int ghostCheckTicks = -1;
+
+	private static void checkClientGhosts(MinecraftClient client) {
+		IntegratedServer server = client.getServer();
+		if (server == null || client.world == null) {
+			return;
+		}
+		net.minecraft.util.registry.RegistryKey<net.minecraft.world.World> key = client.world.getRegistryKey();
+		java.util.Set<Integer> serverIds = server.submit(() -> {
+			java.util.Set<Integer> ids = new java.util.HashSet<>();
+			for (net.minecraft.entity.Entity e : server.getWorld(key).iterateEntities()) {
+				ids.add(e.getEntityId());
+			}
+			return ids;
+		}).join();
+		java.util.Map<String, Integer> ghosts = new java.util.TreeMap<>();
+		for (net.minecraft.entity.Entity e : client.world.getEntities()) {
+			if (!serverIds.contains(e.getEntityId())) {
+				ghosts.merge(net.minecraft.entity.EntityType.getId(e.getType()).getPath(), 1, Integer::sum);
+			}
+		}
+		net.minecraft.world.GameMode serverMode = server.submit(() -> server.getPlayerManager().getPlayerList().get(0).interactionManager.getGameMode()).join();
+		SavestateDebug.log("client-only entities after load: {}, game mode client {} server {}", ghosts, client.interactionManager.getCurrentGameMode(), serverMode);
+	}
+
 	public static void onClientTick(MinecraftClient client) {
+		if (SavestateDebug.ENABLED && ghostCheckTicks >= 0 && --ghostCheckTicks < 0) {
+			checkClientGhosts(client);
+		}
 		if (pendingMessage != null && client.player != null) {
 			overlay(client, pendingMessage);
 			pendingMessage = null;
@@ -193,6 +222,7 @@ public final class SavestateManager {
 			}
 			long ms = (System.nanoTime() - start) / 1_000_000L;
 			overlay(client, "Loaded " + label + " (" + ms + " ms)");
+			ghostCheckTicks = 20;
 		}));
 	}
 

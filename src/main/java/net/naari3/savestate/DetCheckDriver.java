@@ -178,6 +178,16 @@ public final class DetCheckDriver {
 			server.getCommandManager().execute(server.getCommandSource().withSilent(), "scoreboard players add disturbed savestate_dc 1");
 			server.getSaveProperties().getMainWorldProperties().getScheduledEvents().setEvent("savestate-practice:detcheck",
 				world.getTime() + 100000, new net.minecraft.world.timer.FunctionTimerCallback(new net.minecraft.util.Identifier("savestate-practice", "none")));
+			// ゲームモードを切り替える (復元で戻り、クライアントにも伝わるはず)
+			player.setGameMode(player.interactionManager.getGameMode() == GameMode.SURVIVAL ? GameMode.CREATIVE : GameMode.SURVIVAL);
+			// サバイバルにすると block のかき乱し (立ち位置を石で埋める) で窒息死するので、無敵にしておく (能力は復元で戻る)
+			player.abilities.invulnerable = true;
+			player.sendAbilitiesUpdate();
+			// 取得後に生まれたエンティティ (復元で消える) の例として、アイテムを落とす
+			for (int i = 0; i < 3; i++) {
+				world.spawnEntity(new net.minecraft.entity.ItemEntity(world, player.getX() + 2, player.getY() + 1, player.getZ() + i,
+					new net.minecraft.item.ItemStack(net.minecraft.item.Items.DIAMOND)));
+			}
 			if ("block".equals(DISTURB)) {
 				BlockPos feet = player.getBlockPos();
 				for (int dx = -1; dx <= 1; dx++) {
