@@ -95,3 +95,11 @@ jar {
 		rename { "${it}_${project.base.archivesName.get()}" }
 	}
 }
+
+// 開発用の起動は、古い Fabric Loader (0.16.x) が読める Java 17 で行う (利用者の環境に合わせる)。
+// Loader 0.16.x の ASM は JDK 25 のクラスファイルを読めない
+tasks.named("runClient") {
+	javaLauncher = javaToolchains.launcherFor {
+		languageVersion = JavaLanguageVersion.of(17)
+	}
+}
