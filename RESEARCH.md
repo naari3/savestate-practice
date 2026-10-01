@@ -669,3 +669,29 @@
 ### 確認
 - l16.log (Loader 0.16.9、MixinExtras 0.4.1、Java 17、far、200 tick × 3): Mixin の監査でエラーなし、全項目一致
 - 作り直した jar をインスタンスの mods に置き直した。インスタンスでの起動はユーザーに確認してもらう
+
+## 2026-10-02 インスタンスで SL の後に「Entity is already tracked!」でクラッシュ
+
+### 観察 (ユーザーのインスタンスの latest.log と crash report)
+- Llama's Bastion Practice のマップ。ピグリンに倒されてリスポーンした直後に SS (04:44:39)、SL を 2 回 (04:44:43、04:44:46)、04:44:50 にクラッシュ
+- 2 回の SL ともネザーで「1369 chunk holders were not present at capture」「ticking chunk set differs (169 extra)」「850 loaded, 225 extra」「172 re-applied in place」。SL に 3〜4 秒
+- 例外は、チャンクの読み込みでエンティティを入れるとき (ThreadedAnvilChunkStorage.loadEntity) の「Entity is already tracked!」= 同じエンティティ ID が既に追跡されている
+
+### 原因と思われるもの 1 (クラッシュ)
+- 復元の手順で、取得後に読み込まれ、外れずに残ったチャンクのエンティティを記録の NBT から作り直す (spawnFromTags) のが、エンティティ ID のカウンタを取得時の値に戻す (restoreMaxEntityId) より前だった。作り直したエンティティは戻す前の大きい値で採番され、その後カウンタが小さい値に戻るので、後で作られるエンティティの ID と重なる
+- restoreMaxEntityId の「今生きているものと重ならないか」の確認は、プレイヤーしか見ていなかった
+
+### 原因と思われるもの 2 (ネザーのチャンクがそろわない)
+- 仮説: データパックの /forceload。強制読み込みの一覧 (ForcedChunkState、PersistentState) は戻すが、チャンクを読み込ませ続ける FORCED チケットは戻していない。取得後に強制読み込みされたチャンクはチケットが残って外れず、そのまま「その場で当て直し」と spawnFromTags の経路に入る (= 原因 1 の条件になる)
+- 検査に `forceload` のかき乱し (far と同じ移動の後、移動先の周り 5x5 チャンクを ServerWorld.setChunkForced) を足した
+- fl_ctl.log (対策 2 なし): 「871 chunk holders were not present at capture」「49 extra」「81 re-applied in place」、SL 3.9 秒、tick 0 から 97 項目ずれ。残ったチャンクのチケットは `forced 31` → ユーザーのログと同じ形。ユーザーの件が forceload だったかは未確認 (マップのデータパックは見ていない)
+
+### 対策
+- restoreMaxEntityId をエンティティを入れた直後 (spawnFromTags より前) に移した。確認は全エンティティに広げた
+- 強制読み込みの一覧を戻した後、戻す前の一覧との差でチケットを付け外しする (`syncForcedChunkTickets`、ServerChunkManager.setChunkForced はチケットだけを扱う)。取得時に一覧のデータがなければ、一覧を空にする
+- 集合がそろわなかったときの診断 (残ったチャンクのチケット、プレイヤーの位置) を、debug でなくても WARN で出すようにした
+
+### 確認
+- fl1.log (対策あり、forceload、200 tick × 3): 全項目一致。残るチャンクなし
+- crashfix_block / crashfix_dim (200 tick × 3): 全項目一致
+- クラッシュ (原因 1) そのものは再現させていない。対策 2 で、この経路に入ることが減ると思われる

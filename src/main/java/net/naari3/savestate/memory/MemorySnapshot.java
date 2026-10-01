@@ -1,6 +1,9 @@
 package net.naari3.savestate.memory;
 
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongSet;
+import it.unimi.dsi.fastutil.longs.LongSets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -21,6 +24,7 @@ import net.minecraft.server.PlayerManager;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.ChunkPos;
+import net.minecraft.world.ForcedChunkState;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.registry.RegistryKey;
 import net.minecraft.world.PersistentState;
@@ -306,6 +310,10 @@ public final class MemorySnapshot {
 		long start = System.nanoTime();
 		PlayerManager playerManager = server.getPlayerManager();
 		IdentityHashMap<Object, Entity> toFresh = prepared.toFresh;
+		Map<RegistryKey<World>, LongSet> forcedBefore = new LinkedHashMap<>();
+		for (ServerWorld world : server.getWorlds()) {
+			forcedBefore.put(world.getRegistryKey(), new LongOpenHashSet(world.getForcedChunks()));
+		}
 
 		// 別のディメンションにいるプレイヤーは、PlayerBefore を取る前に取得時のディメンションへ移す
 		Map<ServerPlayerEntity, PlayerBefore> before = new IdentityHashMap<>();
@@ -360,6 +368,12 @@ public final class MemorySnapshot {
 		for (PersistentState state : prepared.touchedStates) {
 			state.markDirty();
 		}
+		for (ServerWorld world : server.getWorlds()) {
+			WorldSnap ws = this.worlds.get(world.getRegistryKey());
+			if (ws != null) {
+				syncForcedChunkTickets(world, ws, forcedBefore.get(world.getRegistryKey()));
+			}
+		}
 
 		// entitiesById の並びは tick の順序なので、取得時と同じにする
 		int restored = 0;
@@ -404,6 +418,9 @@ public final class MemorySnapshot {
 			}
 			restoreWorldState(world, ws);
 		}
+		// この後、取得後に読み込まれたチャンクのエンティティを記録から作り直す (spawnFromTags) ので、その前に戻す。
+		// 後で戻すと、作り直したエンティティの ID と、その後に作られるエンティティの ID が重なる
+		restoreMaxEntityId(server);
 
 		timer.mark("entities");
 
@@ -441,7 +458,6 @@ public final class MemorySnapshot {
 		}
 
 		RngState.apply(server, this.rng);
-		restoreMaxEntityId(server);
 		ScheduledTickAccessor.savestate$setIdCounter(this.scheduledTickIdCounter);
 
 		if (SavestateDebug.ENABLED) {
@@ -527,21 +543,46 @@ public final class MemorySnapshot {
 		return ((PersistentStateManagerAccessor) world.getPersistentStateManager()).savestate$getLoadedStates();
 	}
 
+	/**
+	 * 強制読み込み (/forceload) の一覧は ForcedChunkState (PersistentState) として戻るが、チャンクを読み込ませ続けるチケットは別にあり、
+	 * 戻らない。一覧に合わせてチケットを付け外しする。合わせないと、取得後に強制読み込みしたチャンクが外れなくなる。
+	 */
+	private static void syncForcedChunkTickets(ServerWorld world, WorldSnap ws, LongSet before) {
+		PersistentState snap = ws.states.get("chunks");
+		LongSet target = snap instanceof ForcedChunkState ? ((ForcedChunkState) snap).getChunks() : LongSets.EMPTY_SET;
+		if (!(snap instanceof ForcedChunkState)) {
+			// 取得時には一覧のデータ自体がなかった (取得後に初めて強制読み込みした)。一覧を空に戻す
+			PersistentState live = persistentStates(world).get("chunks");
+			if (live instanceof ForcedChunkState) {
+				((ForcedChunkState) live).getChunks().clear();
+				live.markDirty();
+			}
+		}
+		for (long k : before) {
+			if (!target.contains(k)) {
+				world.getChunkManager().setChunkForced(new ChunkPos(k), false);
+			}
+		}
+		for (long k : target) {
+			if (!before.contains(k)) {
+				world.getChunkManager().setChunkForced(new ChunkPos(k), true);
+			}
+		}
+	}
+
 	private void restoreMaxEntityId(MinecraftServer server) {
-		// 取得後に作られて今も生きているエンティティ (リスポーンしたプレイヤーなど) の ID と重ならないときだけ戻す
+		// 今生きているエンティティ (取得後にリスポーンしたプレイヤーなど) の ID と重ならないときだけ戻す
 		int maxLive = 0;
 		for (ServerWorld world : server.getWorlds()) {
 			for (Entity e : world.iterateEntities()) {
-				if (e instanceof ServerPlayerEntity) {
-					maxLive = Math.max(maxLive, e.getEntityId());
-				}
+				maxLive = Math.max(maxLive, e.getEntityId());
 			}
 		}
 		AtomicInteger counter = EntityAccessor.savestate$getMaxEntityId();
 		if (maxLive <= this.maxEntityId) {
 			counter.set(this.maxEntityId);
 		} else {
-			SavestateMod.LOGGER.warn("[memory] entity id counter not restored (player id {} > saved counter {})", maxLive, this.maxEntityId);
+			SavestateMod.LOGGER.warn("[memory] entity id counter not restored (live entity id {} > saved counter {})", maxLive, this.maxEntityId);
 		}
 	}
 

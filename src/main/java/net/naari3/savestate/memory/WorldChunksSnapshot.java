@@ -242,7 +242,8 @@ final class WorldChunksSnapshot {
 		if (extraHolders != 0) {
 			SavestateMod.LOGGER.warn("[memory] {}: {} chunk holders were not present at capture", world.getRegistryKey().getValue(), extraHolders);
 		}
-		if (SavestateDebug.ENABLED && (diff[1] != 0 || diff[2] != 0)) {
+		// そろわなかったときの手がかり (どのチケットが残っているか) を出す
+		if (diff[1] != 0 || diff[2] != 0) {
 			this.logTicketSamples(world, tacs, wanted);
 		}
 		int[] td = tickingDiff(tacs, this.tickingKeys);
@@ -260,18 +261,18 @@ final class WorldChunksSnapshot {
 		for (ChunkHolder holder : tacs.savestate$chunkHolders()) {
 			long k = holder.getPos().toLong();
 			if (fullChunk(holder) != null && !wanted.contains(k) && extraShown++ < 3) {
-				SavestateDebug.log("extra chunk {} level={} tickets={}", holder.getPos(), holder.getLevel(), tickets.savestate$getTicket(k));
+				SavestateMod.LOGGER.warn("[memory] extra chunk {} level={} tickets={}", holder.getPos(), holder.getLevel(), tickets.savestate$getTicket(k));
 			}
 		}
 		int missingShown = 0;
 		for (long k : wanted) {
 			ChunkPos pos = new ChunkPos(k);
 			if (world.getChunk(pos.x, pos.z, ChunkStatus.FULL, false) == null && missingShown++ < 3) {
-				SavestateDebug.log("missing chunk {} tickets={}", pos, tickets.savestate$getTicket(k));
+				SavestateMod.LOGGER.warn("[memory] missing chunk {} tickets={}", pos, tickets.savestate$getTicket(k));
 			}
 		}
 		for (net.minecraft.server.network.ServerPlayerEntity p : world.getPlayers()) {
-			SavestateDebug.log("player {} at {} camera={}", p.getEntityName(), p.getBlockPos(), p.getCameraPosition());
+			SavestateMod.LOGGER.warn("[memory] player {} at {} camera={}", p.getEntityName(), p.getBlockPos(), p.getCameraPosition());
 		}
 	}
 

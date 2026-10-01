@@ -20,6 +20,7 @@ import net.minecraft.world.World;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.Heightmap;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.LiteralText;
@@ -49,6 +50,7 @@ public final class DetCheckDriver {
 	 * dim: 取得時のチャンクを変更 → 別のディメンションへ移動 (オーバーワールド ⇔ ネザー。エンドからはオーバーワールド) → そこでブロックを変更
 	 * end: ドラゴンに大ダメージを与え、エンドクリスタルを壊す → オーバーワールドへ移動 → そこでブロックを変更
 	 * block: 今いる位置 (復帰位置) を石で埋める。プレイヤーは動かさない
+	 * forceload: far と同じ移動の後、移動先の周り 5x5 チャンクを強制読み込み (/forceload と同じ) にする
 	 * 移動する種類では、DISTURB_FAR_TICKS 待って元のチャンクの読み込みを外させ (ディスクに書かせ) てから移動先を変更する。
 	 */
 	private static final String DISTURB = System.getProperty("savestate-practice.detcheck.disturb");
@@ -195,7 +197,7 @@ public final class DetCheckDriver {
 			player.abilities.allowFlying = true;
 			player.abilities.flying = true;
 			player.sendAbilitiesUpdate();
-			if ("far".equals(DISTURB)) {
+			if ("far".equals(DISTURB) || "forceload".equals(DISTURB)) {
 				player.teleport(world, player.getX() + 800, 200, player.getZ(), player.yaw, player.pitch);
 			} else {
 				ServerWorld target = world.getRegistryKey() == World.OVERWORLD ? server.getWorld(World.NETHER) : server.getWorld(World.OVERWORLD);
@@ -216,6 +218,15 @@ public final class DetCheckDriver {
 			}
 		}
 		SavestateMod.LOGGER.info("[DetCheck] disturbance: placed gold near {} (new chunks)", top);
+		if ("forceload".equals(DISTURB)) {
+			ChunkPos center = new ChunkPos(player.getBlockPos());
+			for (int dx = -2; dx <= 2; dx++) {
+				for (int dz = -2; dz <= 2; dz++) {
+					world.setChunkForced(center.x + dx, center.z + dz, true);
+				}
+			}
+			SavestateMod.LOGGER.info("[DetCheck] disturbance: force-loaded 5x5 chunks around {}", center);
+		}
 	}
 
 	private static void disturbDragonFight(ServerWorld world) {
