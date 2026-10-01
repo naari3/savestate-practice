@@ -6,3 +6,4 @@ run/
 *.iml
 .vscode/
 bin/
+extra-mods-test/

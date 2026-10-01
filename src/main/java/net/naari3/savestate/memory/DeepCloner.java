@@ -5,6 +5,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.AbstractMap;
@@ -538,6 +539,46 @@ public final class DeepCloner {
 		});
 	}
 
+	/**
+	 * fastutil のマップの「見つからないときの戻り値」(defRetValue) は、引数なしのコンストラクタで作り直すと既定値 (0 や null) に戻る。
+	 * これを特別な値 (例: -1) にして「見つからない」を判定するコードがある (lithium の LithiumHashPalette は区画のブロックの
+	 * パレットでこれを使い、失われると新しい種類のブロックがすべて 0 番として書き込まれ、その区画にブロックを置けなくなる)。
+	 */
+	private void copyDefaultReturnValue(Object src, Object dst, Class<?> c) {
+		if (!c.getName().startsWith("it.unimi.dsi.fastutil.")) {
+			return;
+		}
+		for (Class<?> k = c; k != null && k != Object.class; k = k.getSuperclass()) {
+			Field f;
+			try {
+				f = k.getDeclaredField("defRetValue");
+			} catch (NoSuchFieldException e) {
+				continue;
+			}
+			if (Modifier.isStatic(f.getModifiers())) {
+				return;
+			}
+			try {
+				f.setAccessible(true);
+				Object value = f.get(src);
+				if (f.getType().isPrimitive()) {
+					f.set(dst, value);
+				} else {
+					this.fillQueue.add(() -> {
+						try {
+							f.set(dst, this.map(value));
+						} catch (IllegalAccessException e) {
+							throw new IllegalStateException(e);
+						}
+					});
+				}
+			} catch (IllegalAccessException e) {
+				throw new IllegalStateException("cannot copy defRetValue of " + c.getName(), e);
+			}
+			return;
+		}
+	}
+
 	/** 引数なしのコンストラクタで作り、要素を API で入れ直す (fastutil、JDK のコレクションを継承した MC のクラス)。 */
 	@SuppressWarnings({"unchecked", "rawtypes"})
 	private Object rebuildByConstructor(Object o, Class<?> c, ClassInfo mcFields) {
@@ -555,6 +596,7 @@ public final class DeepCloner {
 		if (mcFields != null) {
 			this.fillQueue.add(() -> this.copyFields(o, dst, mcFields));
 		}
+		this.copyDefaultReturnValue(o, dst, c);
 		if (o instanceof Map) {
 			this.fillQueueRebuildMap((Map) o, (Map) dst);
 		} else if (o instanceof List) {

@@ -68,9 +68,54 @@ public final class DetCheck {
 		}
 	}
 
+	/** 調査用: 復元から 5 tick 後に、プレイヤーの周りでブロックを置けるかを試す (ワールドを変えるので、比較の結果は使えない)。 */
+	private static final boolean PLACE_TEST = Boolean.getBoolean("savestate-practice.detcheck.placeTest");
+
+	private static void placeTest(MinecraftServer server) {
+		net.minecraft.server.network.ServerPlayerEntity p = server.getPlayerManager().getPlayerList().get(0);
+		ServerWorld w = p.getServerWorld();
+		net.minecraft.util.math.BlockPos base = p.getBlockPos();
+		Map<String, int[]> bySection = new TreeMap<>();
+		for (int dx = -6; dx <= 6; dx++) {
+			for (int dz = -6; dz <= 6; dz++) {
+				for (int dy = -3; dy <= 3; dy++) {
+					if (Math.abs(dx) <= 2 && Math.abs(dz) <= 2) {
+						continue;
+					}
+					net.minecraft.util.math.BlockPos pos = base.add(dx, dy, dz);
+					if (!w.getBlockState(pos).isAir() || w.getBlockState(pos.down()).isAir()) {
+						continue;
+					}
+					String sec = net.minecraft.util.math.ChunkSectionPos.from(pos).toString();
+					int[] c = bySection.computeIfAbsent(sec, k -> new int[4]);
+					// 1. 直接置く
+					boolean direct = w.setBlockState(pos, net.minecraft.block.Blocks.GLASS.getDefaultState()) && w.getBlockState(pos).isOf(net.minecraft.block.Blocks.GLASS);
+					w.setBlockState(pos, net.minecraft.block.Blocks.AIR.getDefaultState());
+					// 2. プレイヤーの操作と同じ経路で置く
+					net.minecraft.item.ItemStack stack = new net.minecraft.item.ItemStack(net.minecraft.item.Items.GLASS, 64);
+					p.setStackInHand(net.minecraft.util.Hand.MAIN_HAND, stack);
+					net.minecraft.util.hit.BlockHitResult hit = new net.minecraft.util.hit.BlockHitResult(
+						net.minecraft.util.math.Vec3d.ofCenter(pos.down()).add(0, 0.5, 0), net.minecraft.util.math.Direction.UP, pos.down(), false);
+					p.interactionManager.interactBlock(p, w, stack, net.minecraft.util.Hand.MAIN_HAND, hit);
+					boolean interact = w.getBlockState(pos).isOf(net.minecraft.block.Blocks.GLASS);
+					w.setBlockState(pos, net.minecraft.block.Blocks.AIR.getDefaultState());
+					c[direct ? 0 : 1]++;
+					c[interact ? 2 : 3]++;
+				}
+			}
+		}
+		for (Map.Entry<String, int[]> e : bySection.entrySet()) {
+			int[] c = e.getValue();
+			net.naari3.savestate.SavestateMod.LOGGER.info("[DetCheck] place test {}: direct ok {} fail {}, interact ok {} fail {}", e.getKey(), c[0], c[1], c[2], c[3]);
+		}
+	}
+
 	/** サーバースレッド。MinecraftServer.tick の終わりで呼ばれる。 */
 	public static void onServerTickEnd(MinecraftServer server) {
 		List<Map<String, String>> r = recording;
+		if (PLACE_TEST && r != null && r.size() == 5) {
+			placeTest(server);
+		}
 		if (r == null || RngState.isHoldingWorldTicks()) {
 			return;
 		}

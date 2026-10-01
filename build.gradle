@@ -40,6 +40,9 @@ loom {
 			if (project.hasProperty("detcheckDump")) {
 				vmArg "-Dsavestate-practice.detcheck.dump=${project.property('detcheckDump')}"
 			}
+			if (project.hasProperty("detcheckPlaceTest")) {
+				vmArg "-Dsavestate-practice.detcheck.placeTest=true"
+			}
 			if (project.hasProperty("detcheckDumpTicks")) {
 				vmArg "-Dsavestate-practice.detcheck.dumpTicks=${project.property('detcheckDumpTicks')}"
 			}
@@ -65,6 +68,10 @@ dependencies {
 	// 任意の依存: 設定画面、キー登録 (key-binding-api を同梱)、MOD の lang の読み込み。なくても動く (Settings、mixin.fallback)
 	// 最新版は https://jitpack.io/#contariaa/speedrunapi で確認する
 	// -PnoSpeedrunApi を付けると、コンパイルにだけ使い、runClient には入れない (ないときの動作の確認用)
+	// 調査用: -PextraMods=<フォルダ> で、そのフォルダの MOD の jar を runClient に入れる (他の MOD との組み合わせの確認)
+	if (project.hasProperty("extraMods")) {
+		modRuntimeOnly fileTree(dir: project.property("extraMods"), include: "*.jar")
+	}
 	if (project.hasProperty("noSpeedrunApi")) {
 		modCompileOnly "com.github.contariaa:SpeedrunAPI:${project.speedrunapi_version}"
 	} else {
