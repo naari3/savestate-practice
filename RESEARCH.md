@@ -652,3 +652,20 @@
 - idloop1〜4 (block、150 tick × 3): 4 回とも全項目一致
 - idreg (200 tick × 3): block、far、dim、start=end の end、すべて全項目一致
 - 修正前は同じ条件で 3 回中 1 回ずれた (itemloopB1〜3。B1 のずれはプレイヤーの向きだけで別件)。修正後の 5 回はずれなし。試行数は多くない
+
+## 2026-10-02 Prism のインスタンス (Fabric Loader 0.16.9) で起動時にクラッシュ
+
+### 観察
+- ユーザーの報告: SpeedrunAPI の preLaunch 中に `MinecraftServer` の Mixin 適用で落ちた。原因の例外は MixinExtras 0.4.1 の `FactoryRedirectWrapperMixinTransformer.transform` (18 行目) での `ClassCastException: ArrayList cannot be cast to AnnotationNode`
+- インスタンスは Fabric Loader 0.16.9 (MixinExtras 0.4.1)、Java 17.0.1。開発環境は Loader 0.19.5 (MixinExtras 0.5.5)、Java 25
+- MixinExtras 0.4.1 のソース: `@Redirect` の `at` を単一の AnnotationNode として読む
+- 配布用 jar も開発用のクラスも、`@Redirect` の `at` が配列 (`at=[@At(...)]`) で出力されていた。remap が原因という仮説は否定
+- `Redirect.at()` の型: sponge-mixin 0.17.3 までは `At`、0.17.4 (Loader 0.19.5 に同梱) で `At[]`。新しい定義でコンパイルしたため、クラスファイルが配列の形になっていた
+
+### 対策
+- `loader_version` を 0.16.9 にした (fabric.mod.json の要求は 0.16.0 以上)。`at` は単一値で出力されるようになった
+- Loader 0.16.x の ASM は JDK 25 のクラスファイル (major 69) を読めず、開発用の起動が落ちたので、`runClient` を Gradle の toolchain で Java 17 にした (インスタンスと同じ)
+
+### 確認
+- l16.log (Loader 0.16.9、MixinExtras 0.4.1、Java 17、far、200 tick × 3): Mixin の監査でエラーなし、全項目一致
+- 作り直した jar をインスタンスの mods に置き直した。インスタンスでの起動はユーザーに確認してもらう
